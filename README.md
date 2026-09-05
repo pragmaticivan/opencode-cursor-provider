@@ -111,7 +111,14 @@ The source code is in `src/`. The build writes the package files to `dist/`.
 
 Releases use [Release Please](https://github.com/googleapis/release-please) with conventional commits (`feat:`, `fix:`, `docs:`, …). Merging to `main` opens or updates a release PR. Merging that PR tags a GitHub release and publishes to npm.
 
-Set the repository secret `NPM_TOKEN` to an npm automation token before the first publish.
+Configure an npm trusted publisher with these values:
+
+- Organization or user: `pragmaticivan`
+- Repository: `opencode-cursor-provider`
+- Workflow filename: `release-please.yml`
+- Allowed action: `npm publish`
+
+The workflow uses OpenID Connect and does not need an npm token.
 
 ## License
 
