@@ -51,14 +51,54 @@ describe("translate", () => {
 
   test("running tools retain their identity and input", () => {
     expect(translate(tool)).toEqual([
-      { type: "tool-call", id: "call", name: "edit", input: { path: "src/index.ts" } },
+      { type: "tool-call", id: "call", name: "edit", input: { filePath: "src/index.ts" } },
     ])
   })
 
   test("completed tools include their result", () => {
     expect(translate({ ...tool, status: "completed", result: { changed: true } })).toEqual([
-      { type: "tool-call", id: "call", name: "edit", input: { path: "src/index.ts" } },
-      { type: "tool-result", id: "call", name: "edit", result: { changed: true }, isError: false },
+      { type: "tool-call", id: "call", name: "edit", input: { filePath: "src/index.ts" } },
+      {
+        type: "tool-result",
+        id: "call",
+        name: "edit",
+        result: { title: "edit", metadata: { changed: true }, output: '{"changed":true}' },
+        isError: false,
+      },
+    ])
+  })
+
+  test("maps Cursor tool fields to native OpenCode fields", () => {
+    expect(translate({ ...tool, name: "read", args: { path: "src/index.ts" } })).toEqual([
+      { type: "tool-call", id: "call", name: "read", input: { filePath: "src/index.ts" } },
+    ])
+  })
+
+  test("unwraps Cursor results into native text output", () => {
+    expect(
+      translate({
+        ...tool,
+        name: "shell",
+        status: "completed",
+        args: { command: "git status" },
+        result: {
+          status: "success",
+          value: { exitCode: 0, signal: "", stdout: "working tree clean\n", stderr: "", executionTime: 10 },
+        },
+      }),
+    ).toEqual([
+      { type: "tool-call", id: "call", name: "shell", input: { command: "git status" } },
+      {
+        type: "tool-result",
+        id: "call",
+        name: "shell",
+        result: {
+          title: "shell",
+          metadata: { exitCode: 0, signal: "", stdout: "working tree clean\n", stderr: "", executionTime: 10 },
+          output: "working tree clean\n",
+        },
+        isError: false,
+      },
     ])
   })
 

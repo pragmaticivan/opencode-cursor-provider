@@ -34,7 +34,13 @@ describe("Cursor language model", () => {
       { type: "text", delta: "before" },
       { type: "reasoning", delta: "think" },
       { type: "tool-call", id: "call", name: "read", input: { path: "a.ts" } },
-      { type: "tool-result", id: "call", name: "read", result: { text: "file" }, isError: false },
+      {
+        type: "tool-result",
+        id: "call",
+        name: "read",
+        result: { title: "read", metadata: {}, output: "file" },
+        isError: false,
+      },
       { type: "text", delta: "after" },
       { type: "done", reason: "stop" },
     ]).doGenerate(call)
@@ -54,7 +60,7 @@ describe("Cursor language model", () => {
         type: "tool-result",
         toolCallId: "call",
         toolName: "read",
-        result: { text: "file" },
+        result: { title: "read", metadata: {}, output: "file" },
         isError: false,
         dynamic: true,
       },

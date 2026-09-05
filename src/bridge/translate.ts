@@ -35,7 +35,8 @@ export function translate(message: SDKMessage): readonly TurnEvent[] {
           events.push({ type: "text", delta: block.text })
         }
         if (block.type === "tool_use") {
-          events.push({ type: "tool-call", id: block.id, name: block.name, input: jsonValue(block.input) })
+          const tool = nativeTool(block.name, block.input)
+          events.push({ type: "tool-call", id: block.id, name: tool.name, input: tool.input })
         }
       }
       return events
@@ -43,21 +44,23 @@ export function translate(message: SDKMessage): readonly TurnEvent[] {
     case "thinking":
       return message.text.length > 0 ? [{ type: "reasoning", delta: message.text }] : []
     case "tool_call": {
+      const tool = nativeTool(message.name, message.args)
       const call: TurnEvent = {
         type: "tool-call",
         id: message.call_id,
-        name: message.name,
-        input: jsonValue(message.args),
+        name: tool.name,
+        input: tool.input,
       }
       if (message.status === "running") return [call]
+      const result = cursorResult(message.result)
       return [
         call,
         {
           type: "tool-result",
           id: message.call_id,
-          name: message.name,
-          result: nonNullJsonValue(message.result),
-          isError: message.status === "error",
+          name: tool.name,
+          result: resultOutput(tool.name, result.value),
+          isError: message.status === "error" || result.isError,
         },
       ]
     }
@@ -86,8 +89,76 @@ export function translate(message: SDKMessage): readonly TurnEvent[] {
   }
 }
 
-function nonNullJsonValue(value: unknown): NonNullJsonValue {
-  return jsonValue(value) ?? "null"
+function nativeTool(name: string, value: unknown): { name: string; input: JsonValue } {
+  const input = jsonValue(value)
+  if (!isJsonObject(input)) return { name, input }
+  if (name === "read" || name === "edit" || name === "write") {
+    return { name, input: rename(input, "path", "filePath") }
+  }
+  if (name === "ls") return { name: "list", input }
+  if (name === "glob") {
+    return { name, input: rename(rename(input, "globPattern", "pattern"), "targetDirectory", "path") }
+  }
+  if (name === "grep") {
+    let mapped = rename(input, "glob", "include")
+    mapped = rename(mapped, "headLimit", "limit")
+    if (typeof mapped.caseInsensitive === "boolean") {
+      mapped = { ...mapped, caseSensitive: !mapped.caseInsensitive }
+      delete mapped.caseInsensitive
+    }
+    return { name, input: mapped }
+  }
+  if (name === "updateTodos") return { name: "todowrite", input }
+  if (name === "task") return { name, input: rename(input, "subagentType", "subagent_type") }
+  return { name, input }
+}
+
+function rename(input: { [key: string]: JsonValue }, from: string, to: string): { [key: string]: JsonValue } {
+  if (!(from in input)) return input
+  const result = { ...input, [to]: input[from] ?? null }
+  delete result[from]
+  return result
+}
+
+function cursorResult(value: unknown): { value: JsonValue; isError: boolean } {
+  const result = jsonValue(value)
+  if (!isJsonObject(result) || typeof result.status !== "string") return { value: result, isError: false }
+  if (result.status === "success" && "value" in result) return { value: result.value ?? null, isError: false }
+  if (result.status === "error" && "error" in result) return { value: result.error ?? "Tool call failed", isError: true }
+  return { value: result, isError: result.status === "error" }
+}
+
+function resultOutput(name: string, value: JsonValue): NonNullJsonValue {
+  const metadata = isJsonObject(value) ? value : {}
+  return {
+    title: name,
+    metadata,
+    output: textOutput(name, value),
+  }
+}
+
+function textOutput(name: string, value: JsonValue): string {
+  if (typeof value === "string") return value
+  if (isJsonObject(value)) {
+    if (name === "shell") {
+      const stdout = typeof value.stdout === "string" ? value.stdout : ""
+      const stderr = typeof value.stderr === "string" ? value.stderr : ""
+      if (stdout.length > 0 || stderr.length > 0) return stdout + stderr
+    }
+    if (name === "read" && typeof value.content === "string") return value.content
+    if (name === "edit" && typeof value.diffString === "string") return value.diffString
+    if (name === "glob" && Array.isArray(value.files)) return value.files.filter(isString).join("\n")
+    if (name === "task" && typeof value.resultSuffix === "string") return value.resultSuffix
+  }
+  return JSON.stringify(value) ?? "null"
+}
+
+function isJsonObject(value: JsonValue): value is { [key: string]: JsonValue } {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isString(value: JsonValue): value is string {
+  return typeof value === "string"
 }
 
 function jsonValue(value: unknown, seen: WeakSet<object> = new WeakSet()): JsonValue {
