@@ -107,6 +107,12 @@ bun run build
 
 The source code is in `src/`. The build writes the package files to `dist/`.
 
+## Release
+
+Releases use [Release Please](https://github.com/googleapis/release-please) with conventional commits (`feat:`, `fix:`, `docs:`, …). Merging to `main` opens or updates a release PR. Merging that PR tags a GitHub release and publishes to npm.
+
+Set the repository secret `NPM_TOKEN` to an npm automation token before the first publish.
+
 ## License
 
 Apache License 2.0. See [`LICENSE`](LICENSE).
