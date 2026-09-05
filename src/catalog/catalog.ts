@@ -1,3 +1,4 @@
+import type { ModelParameterDefinition, ModelParameterValue, ModelVariant } from "@cursor/sdk"
 import { Integration, Model, Provider } from "@opencode-ai/plugin"
 import type { CatalogEditor } from "@opencode-ai/plugin/promise/catalog"
 import { PACKAGE_SPEC, PROVIDER_ID, asCatalogModelID, asCursorModelID, type CatalogModelID, type CursorModelID } from "../ids.ts"
@@ -6,18 +7,26 @@ export interface CursorModelDescriptor {
   readonly catalogID: CatalogModelID
   readonly wireID: CursorModelID
   readonly name: string
+  readonly parameters: readonly ModelParameterDefinition[]
+  readonly variants: readonly ModelVariant[]
 }
+
+export const CURSOR_MODEL_PARAMS = "cursorModelParams"
 
 export const SEED_MODELS: readonly CursorModelDescriptor[] = [
   {
     catalogID: asCatalogModelID("composer-2.5"),
     wireID: asCursorModelID("composer-2.5"),
     name: "Composer 2.5",
+    parameters: [],
+    variants: [],
   },
   {
     catalogID: asCatalogModelID("auto"),
     wireID: asCursorModelID("auto"),
     name: "Cursor Auto",
+    parameters: [],
+    variants: [],
   },
 ]
 
@@ -38,43 +47,32 @@ export function applyProvider(draft: CatalogEditor): void {
 
 export function applyModels(draft: CatalogEditor, models: readonly CursorModelDescriptor[]): void {
   for (const model of models) {
-    draft.model.update(PROVIDER_ID, model.catalogID, (entry) => {
-      const defaults = Model.Info.default(providerId(), Model.ID.make(model.catalogID))
-      entry.id = defaults.id
-      entry.modelID = Model.ID.make(model.wireID)
-      entry.providerID = defaults.providerID
-      entry.name = model.name
-      entry.capabilities = { tools: false, input: ["text"], output: ["text"] }
-      entry.variants = defaults.variants
-      entry.time = defaults.time
-      entry.cost = defaults.cost
-      entry.status = "active"
-      entry.enabled = true
-      entry.limit = defaults.limit
-      entry.package = PACKAGE_SPEC
-      dropBaseURL(entry.settings)
-    })
+    writeModel(draft, model.catalogID, model)
   }
   const preferred = models[0]
   if (preferred) {
-    draft.model.update(PROVIDER_ID, "default", (entry) => {
-      const defaults = Model.Info.default(providerId(), Model.ID.make("default"))
-      entry.id = defaults.id
-      entry.modelID = Model.ID.make(preferred.wireID)
-      entry.providerID = defaults.providerID
-      entry.name = preferred.name
-      entry.capabilities = { tools: false, input: ["text"], output: ["text"] }
-      entry.variants = defaults.variants
-      entry.time = defaults.time
-      entry.cost = defaults.cost
-      entry.status = "active"
-      entry.enabled = true
-      entry.limit = defaults.limit
-      entry.package = PACKAGE_SPEC
-      dropBaseURL(entry.settings)
-    })
+    writeModel(draft, "default", preferred)
     draft.model.default.set(PROVIDER_ID, preferred.catalogID)
   }
+}
+
+function writeModel(draft: CatalogEditor, catalogID: string, model: CursorModelDescriptor): void {
+  draft.model.update(PROVIDER_ID, catalogID, (entry) => {
+    const defaults = Model.Info.default(providerId(), Model.ID.make(catalogID))
+    entry.id = defaults.id
+    entry.modelID = Model.ID.make(model.wireID)
+    entry.providerID = defaults.providerID
+    entry.name = model.name
+    entry.capabilities = { tools: false, input: ["text"], output: ["text"] }
+    entry.variants = toCatalogVariants(model)
+    entry.time = defaults.time
+    entry.cost = defaults.cost
+    entry.status = "active"
+    entry.enabled = true
+    entry.limit = defaults.limit
+    entry.package = PACKAGE_SPEC
+    dropBaseURL(entry.settings)
+  })
 }
 
 export function parseListedModels(raw: unknown): CursorModelDescriptor[] {
@@ -117,7 +115,77 @@ function parseListedItem(item: unknown): CursorModelDescriptor | undefined {
     catalogID: asCatalogModelID(id),
     wireID: asCursorModelID(id),
     name,
+    parameters: parseParameters(item.parameters),
+    variants: parseVariants(item.variants),
   }
+}
+
+function parseParameters(value: unknown): ModelParameterDefinition[] {
+  if (!Array.isArray(value)) return []
+  const definitions: ModelParameterDefinition[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id !== "string" || !Array.isArray(item.values)) continue
+    const values: Array<{ value: string; displayName?: string }> = []
+    for (const candidate of item.values) {
+      if (!isRecord(candidate) || typeof candidate.value !== "string") continue
+      values.push({
+        value: candidate.value,
+        ...(typeof candidate.displayName === "string" ? { displayName: candidate.displayName } : {}),
+      })
+    }
+    definitions.push({
+      id: item.id,
+      values,
+      ...(typeof item.displayName === "string" ? { displayName: item.displayName } : {}),
+    })
+  }
+  return definitions
+}
+
+function parseVariants(value: unknown): ModelVariant[] {
+  if (!Array.isArray(value)) return []
+  const variants: ModelVariant[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.displayName !== "string") continue
+    const params = parseParams(item.params)
+    if (params === undefined) continue
+    variants.push({
+      displayName: item.displayName,
+      params,
+      ...(typeof item.description === "string" ? { description: item.description } : {}),
+      ...(typeof item.isDefault === "boolean" ? { isDefault: item.isDefault } : {}),
+    })
+  }
+  return variants
+}
+
+function parseParams(value: unknown): ModelParameterValue[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const params: ModelParameterValue[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id !== "string" || typeof item.value !== "string") return undefined
+    params.push({ id: item.id, value: item.value })
+  }
+  return params
+}
+
+export function toCatalogVariants(model: CursorModelDescriptor | undefined): Model.Variant[] {
+  if (model === undefined) return []
+  const seen = new Map<string, number>()
+  return model.variants.map((variant) => {
+    const count = (seen.get(variant.displayName) ?? 0) + 1
+    seen.set(variant.displayName, count)
+    const id = count === 1 ? variant.displayName : `${variant.displayName}-${count}`
+    return {
+      id: Model.VariantID.make(id),
+      body: { [CURSOR_MODEL_PARAMS]: variant.params.map((param) => ({ ...param })) },
+    }
+  })
+}
+
+export function modelParamsFromOptions(options: unknown): readonly ModelParameterValue[] | undefined {
+  if (!isRecord(options)) return undefined
+  return parseParams(options[CURSOR_MODEL_PARAMS])
 }
 
 function dropBaseURL(settings: Record<string, unknown> | undefined): void {

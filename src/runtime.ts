@@ -1,5 +1,5 @@
 import type { SessionAgentBridge } from "./bridge/bridge.ts"
-import { resolveWireId, type CursorModelDescriptor } from "./catalog/catalog.ts"
+import { modelParamsFromOptions, resolveWireId, type CursorModelDescriptor } from "./catalog/catalog.ts"
 import { asCatalogModelID, asCursorModelID } from "./ids.ts"
 import { toLanguageModel } from "./model/language-model.ts"
 
@@ -14,7 +14,7 @@ export function bindRuntime(next: CursorRuntime): void {
   runtime = next
 }
 
-export function model(modelID: string, _settings?: unknown) {
+export function model(modelID: string, settings?: unknown) {
   if (runtime === undefined) {
     throw new Error("Cursor is not loaded. Add opencode-cursor-provider to plugins and restart OpenCode.")
   }
@@ -23,5 +23,12 @@ export function model(modelID: string, _settings?: unknown) {
     bridge: runtime.bridge,
     modelID: asCatalogModelID(modelID),
     wireID,
+    ...paramsOption(settings),
   })
+}
+
+function paramsOption(settings: unknown): { readonly params: NonNullable<ReturnType<typeof modelParamsFromOptions>> } | Record<never, never> {
+  const params = modelParamsFromOptions(settings)
+  if (params === undefined) return {}
+  return { params }
 }

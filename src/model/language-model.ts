@@ -1,69 +1,119 @@
 import type {
   LanguageModelV3,
   LanguageModelV3CallOptions,
+  LanguageModelV3Content,
   LanguageModelV3FinishReason,
+  LanguageModelV3GenerateResult,
   LanguageModelV3StreamPart,
   LanguageModelV3Usage,
+  SharedV3Warning,
 } from "@ai-sdk/provider"
-import type { SessionAgentBridge } from "../bridge/bridge.ts"
+import type { ModelParameterValue } from "@cursor/sdk"
+import type { SessionAgentBridge, TurnRequest } from "../bridge/bridge.ts"
 import { extractScope } from "../bridge/correlation.ts"
 import type { Conversation, ConversationTurn } from "../bridge/conversation.ts"
 import type { TurnEvent } from "../bridge/translate.ts"
 import { CursorPluginFailure, type CursorPluginError } from "../errors.ts"
-import { asCatalogModelID, type CatalogModelID } from "../ids.ts"
+import type { CatalogModelID } from "../ids.ts"
 
 export function toLanguageModel(input: {
   bridge: SessionAgentBridge
   modelID: CatalogModelID
   wireID: string
+  params?: readonly ModelParameterValue[]
 }): LanguageModelV3 {
+  const stream = (options: LanguageModelV3CallOptions) => {
+    const coupled = coupleAbort(options.abortSignal)
+    return toStreamParts(
+      input.bridge.turn(parseCall({ ...options, abortSignal: coupled.signal }, input.modelID, input.params)),
+      coupled.abort,
+      warningsOf(options),
+    )
+  }
+
   return {
     specificationVersion: "v3",
     provider: "cursor",
     modelId: input.wireID,
     supportedUrls: {},
-    doGenerate: async (options) => {
-      const parts: LanguageModelV3StreamPart[] = []
-      const { stream } = await toLanguageModel(input).doStream(options)
-      const reader = stream.getReader()
-      while (true) {
-        const next = await reader.read()
-        if (next.done) break
-        parts.push(next.value)
-      }
-      const text = parts
-        .filter((part) => part.type === "text-delta")
-        .map((part) => part.delta)
-        .join("")
-      const finish = parts.find((part) => part.type === "finish")
-      return {
-        content: text.length > 0 ? [{ type: "text", text }] : [],
-        finishReason: finish && finish.type === "finish" ? finish.finishReason : stopped(),
-        usage: finish && finish.type === "finish" ? finish.usage : emptyUsage(),
-        warnings: [],
-      }
-    },
-    doStream: async (options) => ({
-      stream: toStreamParts(input.bridge.turn(toTurnRequest(options, input.modelID))),
-    }),
+    doGenerate: async (options) => collectGenerate(stream(options)),
+    doStream: async (options) => ({ stream: stream(options) }),
   }
-}
-
-export function toTurnRequest(
-  options: LanguageModelV3CallOptions,
-  modelID: CatalogModelID,
-): import("../bridge/bridge.ts").TurnRequest {
-  return parseCall(options, modelID)
 }
 
 function refuse(error: CursorPluginError): never {
   throw new CursorPluginFailure(error)
 }
 
+async function collectGenerate(stream: ReadableStream<LanguageModelV3StreamPart>): Promise<LanguageModelV3GenerateResult> {
+  const content: LanguageModelV3Content[] = []
+  let finishReason: LanguageModelV3FinishReason = { unified: "other", raw: undefined }
+  let usage = emptyUsage()
+  let warnings: SharedV3Warning[] = []
+  const reader = stream.getReader()
+  try {
+    while (true) {
+      const next = await reader.read()
+      if (next.done) break
+      const part = next.value
+      switch (part.type) {
+        case "stream-start":
+          warnings = part.warnings
+          break
+        case "text-delta":
+          appendText(content, part.delta)
+          break
+        case "reasoning-delta":
+          appendReasoning(content, part.delta)
+          break
+        case "tool-call":
+        case "tool-result":
+          content.push(part)
+          break
+        case "finish":
+          finishReason = part.finishReason
+          usage = part.usage
+          break
+        case "error":
+          throw part.error
+        default:
+          break
+      }
+    }
+    return {
+      content,
+      finishReason,
+      usage,
+      warnings,
+    }
+  } finally {
+    await reader.cancel()
+  }
+}
+
+function appendText(content: LanguageModelV3Content[], delta: string): void {
+  const previous = content.at(-1)
+  if (previous?.type === "text") {
+    previous.text += delta
+    return
+  }
+  content.push({ type: "text", text: delta })
+}
+
+function appendReasoning(content: LanguageModelV3Content[], delta: string): void {
+  const previous = content.at(-1)
+  if (previous?.type === "reasoning") {
+    previous.text += delta
+    return
+  }
+  content.push({ type: "reasoning", text: delta })
+}
+
 function parseCall(
   options: LanguageModelV3CallOptions,
   modelID: CatalogModelID,
-): import("../bridge/bridge.ts").TurnRequest {
+  params: readonly ModelParameterValue[] | undefined,
+): TurnRequest {
   if (options.tools !== undefined && options.tools.length > 0) {
     refuse({ kind: "unsupported-request", reason: "tools-requested" })
   }
@@ -78,6 +128,9 @@ function parseCall(
       system.push(message.content)
       continue
     }
+    if (message.content.some((part) => part.type === "file")) {
+      refuse({ kind: "unsupported-request", reason: "file-input" })
+    }
     if (message.role === "user" || message.role === "assistant") {
       const text = textOf(message.content)
       if (text.length > 0) turns.push({ role: message.role, text })
@@ -90,6 +143,7 @@ function parseCall(
     modelID,
     scope: extracted.scope,
     conversation,
+    ...(params === undefined ? {} : { params }),
     ...(options.abortSignal === undefined ? {} : { signal: options.abortSignal }),
   }
 }
@@ -106,13 +160,20 @@ function textOf(content: unknown): string {
   return parts.join("")
 }
 
-function toStreamParts(events: AsyncIterable<TurnEvent>): ReadableStream<LanguageModelV3StreamPart> {
+function toStreamParts(
+  events: AsyncIterable<TurnEvent>,
+  abort: AbortController,
+  warnings: SharedV3Warning[],
+): ReadableStream<LanguageModelV3StreamPart> {
   return new ReadableStream({
     async start(controller) {
-      controller.enqueue({ type: "stream-start", warnings: [] })
+      controller.enqueue({ type: "stream-start", warnings })
       let textId: string | undefined
       let reasoningId: string | undefined
       let usage = emptyUsage()
+      let finishReason: LanguageModelV3FinishReason = { unified: "other", raw: undefined }
+      let failed = false
+      const tools = new Map<string, "called" | "completed">()
       try {
         for await (const event of events) {
           switch (event.type) {
@@ -138,12 +199,46 @@ function toStreamParts(events: AsyncIterable<TurnEvent>): ReadableStream<Languag
               }
               controller.enqueue({ type: "reasoning-delta", id: reasoningId, delta: event.delta })
               break
+            case "tool-call":
+              if (tools.has(event.id)) break
+              if (reasoningId) {
+                controller.enqueue({ type: "reasoning-end", id: reasoningId })
+                reasoningId = undefined
+              }
+              if (textId) {
+                controller.enqueue({ type: "text-end", id: textId })
+                textId = undefined
+              }
+              controller.enqueue({
+                type: "tool-call",
+                toolCallId: event.id,
+                toolName: event.name,
+                input: JSON.stringify(event.input),
+                providerExecuted: true,
+                dynamic: true,
+              })
+              tools.set(event.id, "called")
+              break
+            case "tool-result":
+              if (tools.get(event.id) === "completed") break
+              controller.enqueue({
+                type: "tool-result",
+                toolCallId: event.id,
+                toolName: event.name,
+                result: event.result,
+                isError: event.isError,
+                dynamic: true,
+              })
+              tools.set(event.id, "completed")
+              break
             case "usage":
-              usage = usageFrom(event.input, event.output)
+              usage = usageFrom(event)
               break
             case "done":
+              finishReason = reasonFrom(event.reason)
               break
             case "failed":
+              failed = true
               controller.enqueue({ type: "error", error: new CursorPluginFailure(event.error) })
               break
             default: {
@@ -154,9 +249,13 @@ function toStreamParts(events: AsyncIterable<TurnEvent>): ReadableStream<Languag
         }
         if (reasoningId) controller.enqueue({ type: "reasoning-end", id: reasoningId })
         if (textId) controller.enqueue({ type: "text-end", id: textId })
+        if (failed) {
+          controller.close()
+          return
+        }
         controller.enqueue({
           type: "finish",
-          finishReason: stopped(),
+          finishReason,
           usage,
         })
         controller.close()
@@ -165,24 +264,56 @@ function toStreamParts(events: AsyncIterable<TurnEvent>): ReadableStream<Languag
         controller.close()
       }
     },
+    cancel() {
+      abort.abort()
+    },
   })
 }
 
-export function catalogIdFromModel(id: string): CatalogModelID {
-  return asCatalogModelID(id)
+function coupleAbort(signal: AbortSignal | undefined): { signal: AbortSignal; abort: AbortController } {
+  const abort = new AbortController()
+  if (signal === undefined) return { signal: abort.signal, abort }
+  if (signal.aborted) {
+    abort.abort()
+    return { signal, abort }
+  }
+  return { signal: AbortSignal.any([signal, abort.signal]), abort }
+}
+
+function warningsOf(options: LanguageModelV3CallOptions): SharedV3Warning[] {
+  const warnings: SharedV3Warning[] = []
+  if (options.temperature !== undefined) warnings.push({ type: "unsupported", feature: "temperature" })
+  if (options.topP !== undefined) warnings.push({ type: "unsupported", feature: "topP" })
+  if (options.topK !== undefined) warnings.push({ type: "unsupported", feature: "topK" })
+  if (options.maxOutputTokens !== undefined) warnings.push({ type: "unsupported", feature: "maxOutputTokens" })
+  return warnings
 }
 
 function emptyUsage(): LanguageModelV3Usage {
-  return usageFrom(0, 0)
-}
-
-function usageFrom(input: number, output: number): LanguageModelV3Usage {
   return {
-    inputTokens: { total: input, noCache: input, cacheRead: undefined, cacheWrite: undefined },
-    outputTokens: { total: output, text: output, reasoning: undefined },
+    inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: undefined, text: undefined, reasoning: undefined },
   }
 }
 
-function stopped(): LanguageModelV3FinishReason {
-  return { unified: "stop", raw: undefined }
+function usageFrom(event: Extract<TurnEvent, { type: "usage" }>): LanguageModelV3Usage {
+  return {
+    inputTokens: {
+      total: event.input,
+      noCache: Math.max(0, event.input - event.cacheRead - event.cacheWrite),
+      cacheRead: event.cacheRead,
+      cacheWrite: event.cacheWrite,
+    },
+    outputTokens: {
+      total: event.output,
+      text: Math.max(0, event.output - event.reasoning),
+      reasoning: event.reasoning,
+    },
+  }
+}
+
+function reasonFrom(reason: Extract<TurnEvent, { type: "done" }>["reason"]): LanguageModelV3FinishReason {
+  if (reason === "stop") return { unified: "stop", raw: reason }
+  if (reason === "length") return { unified: "length", raw: reason }
+  return { unified: "other", raw: reason }
 }

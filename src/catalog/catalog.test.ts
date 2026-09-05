@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { asCatalogModelID } from "../ids.ts"
-import { parseListedModels } from "./catalog.ts"
+import { modelParamsFromOptions, parseListedModels, toCatalogVariants } from "./catalog.ts"
 
 describe("parseListedModels", () => {
   test("reads a Cursor SDK list", () => {
@@ -27,6 +27,32 @@ describe("parseListedModels", () => {
     expect(parseListedModels([]).map((model) => model.catalogID)).toEqual([
       asCatalogModelID("composer-2.5"),
       asCatalogModelID("auto"),
+    ])
+  })
+
+  test("preserves model parameters and predefined variants", () => {
+    const listed = parseListedModels([
+      {
+        id: "composer",
+        displayName: "Composer",
+        parameters: [{ id: "thinking", displayName: "Thinking", values: [{ value: "high" }] }],
+        variants: [{ displayName: "High", params: [{ id: "thinking", value: "high" }], isDefault: true }],
+      },
+    ])
+
+    expect(listed[0]?.parameters).toEqual([
+      { id: "thinking", displayName: "Thinking", values: [{ value: "high" }] },
+    ])
+    const variants = toCatalogVariants(listed[0])
+    expect(String(variants[0]?.id)).toBe("High")
+    expect(variants[0]?.body).toEqual({ cursorModelParams: [{ id: "thinking", value: "high" }] })
+  })
+})
+
+describe("modelParamsFromOptions", () => {
+  test("reads Cursor params from OpenCode request options", () => {
+    expect(modelParamsFromOptions({ cursorModelParams: [{ id: "thinking", value: "high" }] })).toEqual([
+      { id: "thinking", value: "high" },
     ])
   })
 })

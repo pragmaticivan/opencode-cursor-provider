@@ -1,8 +1,8 @@
 import { Cursor } from "@cursor/sdk"
 import { Credential, Integration, Plugin } from "@opencode-ai/plugin"
 import type { IntegrationEditor } from "@opencode-ai/plugin/promise/integration"
-import { ENV_NAME, INTEGRATION_ID, OAUTH_METHOD_ID, nowMs } from "../ids.ts"
-import { envCredential, fromHostCredential, oauthFromLogin, toHostOAuth } from "./credential.ts"
+import { ENV_NAME, INTEGRATION_ID, OAUTH_METHOD_ID, nowMs, type Parsed } from "../ids.ts"
+import { envCredential, fromHostCredential, oauthFromLogin, toHostOAuth, type CursorCredential } from "./credential.ts"
 import { reduce, usableKey, type AuthState } from "./state.ts"
 
 export interface CursorLink {
@@ -36,25 +36,7 @@ export function createCursorLink(input: { env?: NodeJS.ProcessEnv; clock?: () =>
       assign(reduce(state, { type: "rejected-by-cursor" }))
     },
     async restore(ctx) {
-      try {
-        const connection = await ctx.integration.connection.active(INTEGRATION_ID)
-        if (!connection) {
-          assign(reduce(state, { type: "restore", stored: envCredential(env), now: nowMs(clock) }))
-          return
-        }
-        const stored = await ctx.integration.connection.resolve(connection)
-        if (stored) {
-          assign(reduce(state, { type: "restore", stored: fromHostCredential(stored, env), now: nowMs(clock) }))
-          return
-        }
-        if (connection.type === "env") {
-          assign(reduce(state, { type: "restore", stored: envCredential(env), now: nowMs(clock) }))
-          return
-        }
-        assign(reduce(state, { type: "restore", stored: envCredential(env), now: nowMs(clock) }))
-      } catch {
-        assign(reduce(state, { type: "restore", stored: envCredential(env), now: nowMs(clock) }))
-      }
+      assign(reduce(state, { type: "restore", stored: await loadStored(ctx, env), now: nowMs(clock) }))
     },
     onLinked(listener) {
       listeners.add(listener)
@@ -139,4 +121,17 @@ export function createCursorLink(input: { env?: NodeJS.ProcessEnv; clock?: () =>
       })
     },
   }
+}
+
+async function loadStored(ctx: Plugin.Context, env: NodeJS.ProcessEnv): Promise<Parsed<CursorCredential>> {
+  try {
+    const connection = await ctx.integration.connection.active(INTEGRATION_ID)
+    if (connection) {
+      const stored = await ctx.integration.connection.resolve(connection)
+      if (stored) return fromHostCredential(stored, env)
+    }
+  } catch {
+    // Host lookup is best-effort. CURSOR_API_KEY is the fallback.
+  }
+  return envCredential(env)
 }

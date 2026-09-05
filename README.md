@@ -47,3 +47,6 @@ Then `/models` and pick `cursor/composer-2.5` (or another listed Cursor model).
 - OpenCode 2 only.
 - Login mints a user API key. There is no refresh token. Sign in again when it expires.
 - Credentials live in OpenCode. The plugin does not write `~/.cursor/sdk/auth.json`.
+- Cursor tools run inside Cursor. OpenCode shows them as provider-executed tool calls.
+- Model variants come from Cursor. OpenCode sampling controls such as temperature are not sent to Cursor.
+- The plugin rejects file and image parts. It does not drop them.
