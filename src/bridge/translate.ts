@@ -12,6 +12,7 @@ export type TurnEvent =
   | { readonly type: "text"; readonly delta: string }
   | { readonly type: "reasoning"; readonly delta: string }
   | { readonly type: "tool-call"; readonly id: string; readonly name: string; readonly input: JsonValue }
+  | { readonly type: "tool-request"; readonly id: string; readonly name: string; readonly input: JsonValue }
   | {
       readonly type: "tool-result"
       readonly id: string
@@ -30,7 +31,7 @@ export type TurnEvent =
     }
   | {
       readonly type: "done"
-      readonly reason: "stop" | "length" | "aborted"
+      readonly reason: "stop" | "length" | "aborted" | "tool-calls"
       readonly metadata?: {
         readonly runId: string
         readonly requestId?: string

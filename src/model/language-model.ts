@@ -12,8 +12,9 @@ import type {
   LanguageModelV3Usage,
   SharedV3Warning,
 } from "@ai-sdk/provider"
-import type { ModelParameterValue } from "@cursor/sdk"
+import type { ModelParameterValue, SDKJsonValue } from "@cursor/sdk"
 import type { SessionAgentBridge, TurnRequest } from "../bridge/bridge.ts"
+import type { OpenCodeToolDefinition } from "../bridge/tool-bridge.ts"
 import { extractScope } from "../bridge/correlation.ts"
 import {
   canonicalJson,
@@ -139,9 +140,6 @@ function parseCall(
   modelID: CatalogModelID,
   params: readonly ModelParameterValue[] | undefined,
 ): TurnRequest {
-  if (options.tools !== undefined && options.tools.length > 0) {
-    refuse({ kind: "unsupported-request", reason: "tools-requested" })
-  }
   if (options.toolChoice !== undefined && options.toolChoice.type !== "auto") {
     refuse({ kind: "unsupported-request", reason: "tool-choice" })
   }
@@ -175,15 +173,49 @@ function parseCall(
   const extracted = extractScope(system)
   const conversation: Conversation = { system: extracted.system, turns }
   const cursor = parseCursorOptions(options.providerOptions?.cursor)
+  const tools = parseTools(options.tools)
   return {
     modelID,
     scope: extracted.scope,
     conversation,
+    ...(tools.length === 0 ? {} : { tools }),
     ...cursor,
     ...(options.includeRawChunks === true ? { includeRawChunks: true } : {}),
     ...(params === undefined ? {} : { params }),
     ...(options.abortSignal === undefined ? {} : { signal: options.abortSignal }),
   }
+}
+
+function parseTools(tools: LanguageModelV3CallOptions["tools"]): OpenCodeToolDefinition[] {
+  if (tools === undefined) return []
+  const parsed: OpenCodeToolDefinition[] = []
+  for (const tool of tools) {
+    if (tool.type !== "function") refuse({ kind: "unsupported-request", reason: "tools-requested" })
+    const inputSchema = sdkJsonValue(tool.inputSchema)
+    if (typeof inputSchema !== "object" || inputSchema === null || Array.isArray(inputSchema)) {
+      refuse({ kind: "unsupported-request", reason: "tools-requested" })
+    }
+    parsed.push({
+      name: tool.name,
+      ...(tool.description === undefined ? {} : { description: tool.description }),
+      inputSchema,
+    })
+  }
+  return parsed
+}
+
+function sdkJsonValue(value: unknown): SDKJsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value
+  if (typeof value === "number") return Number.isFinite(value) ? value : String(value)
+  if (Array.isArray(value)) return value.map(sdkJsonValue)
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter((entry) => entry[1] !== undefined)
+        .map(([key, item]) => [key, sdkJsonValue(item)]),
+    )
+  }
+  return String(value)
 }
 
 type AssistantContent = Extract<LanguageModelV3Message, { role: "assistant" }>["content"]
@@ -412,6 +444,17 @@ function toStreamParts(
               })
               tools.set(event.id, "called")
               break
+            case "tool-request":
+              if (tools.has(event.id)) break
+              closeOpenParts()
+              controller.enqueue({
+                type: "tool-call",
+                toolCallId: event.id,
+                toolName: event.name,
+                input: JSON.stringify(event.input),
+              })
+              tools.set(event.id, "called")
+              break
             case "tool-result":
               if (tools.get(event.id) === "completed") break
               controller.enqueue({
@@ -585,5 +628,6 @@ function usageFrom(event: Extract<TurnEvent, { type: "usage" }>): LanguageModelV
 function reasonFrom(reason: Extract<TurnEvent, { type: "done" }>["reason"]): LanguageModelV3FinishReason {
   if (reason === "stop") return { unified: "stop", raw: reason }
   if (reason === "length") return { unified: "length", raw: reason }
+  if (reason === "tool-calls") return { unified: "tool-calls", raw: reason }
   return { unified: "other", raw: reason }
 }

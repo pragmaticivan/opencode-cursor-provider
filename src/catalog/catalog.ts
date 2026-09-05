@@ -63,7 +63,7 @@ function writeModel(draft: CatalogEditor, catalogID: string, model: CursorModelD
     entry.modelID = Model.ID.make(model.wireID)
     entry.providerID = defaults.providerID
     entry.name = model.name
-    entry.capabilities = { tools: false, input: ["text", "image"], output: ["text"] }
+    entry.capabilities = { tools: true, input: ["text", "image"], output: ["text"] }
     entry.variants = toCatalogVariants(model)
     entry.time = defaults.time
     entry.cost = defaults.cost

@@ -93,6 +93,120 @@ async function eventsFrom(run: ReturnType<typeof runner>, signal?: AbortSignal) 
 }
 
 describe("runTurn", () => {
+  test("continues one Cursor run after OpenCode executes a bridged tool", async () => {
+    const scope = { sessionID: asSessionID("ses_tools"), cwd: "/repo" }
+    let sends = 0
+    let opens = 0
+    let disposals = 0
+    const run = fakeRun({
+      messages: async function* () {},
+    })
+    const executeTool: { current?: () => Promise<unknown> } = {}
+    const bridge = createTurnRunner({
+      link: {
+        async resolve() {
+          return asApiKey("key")
+        },
+        register() {},
+        async restore() {},
+        reject() {},
+        onLinked() {
+          return () => {}
+        },
+      },
+      models: () => SEED_MODELS,
+      bindings: createBindingStore(),
+      clock: () => 1,
+      lock: createLock(),
+      async openAgent() {
+        opens += 1
+        return {
+          id: asAgentID("agent-id"),
+          async send(_message, options) {
+            sends += 1
+            const tool = options?.local?.customTools?.opencode__docs_search
+            executeTool.current = async () => tool?.execute({ query: "Cursor" }, { toolCallId: "cursor-call" })
+            return {
+              ...run,
+              stream: async function* () {
+                const result = await executeTool.current?.()
+                yield {
+                  type: "assistant" as const,
+                  agent_id: "agent",
+                  run_id: "run",
+                  message: {
+                    role: "assistant" as const,
+                    content: [{ type: "text" as const, text: `Found: ${JSON.stringify(result)}` }],
+                  },
+                }
+              },
+            }
+          },
+          async dispose() {
+            disposals += 1
+          },
+        }
+      },
+    })
+    const tools = [
+      {
+        name: "docs_search",
+        description: "Search the documentation",
+        inputSchema: { type: "object" },
+      },
+    ]
+    const firstConversation = {
+      system: [],
+      turns: [{ role: "user" as const, parts: [{ type: "text" as const, text: "search docs" }] }],
+    }
+
+    const first = await Array.fromAsync(
+      bridge({ modelID: asCatalogModelID("composer-2.5"), scope, conversation: firstConversation, tools }),
+    )
+    const toolRequest = first.find((event) => event.type === "tool-request")
+    expect(toolRequest).toMatchObject({ name: "docs_search", input: { query: "Cursor" } })
+    if (toolRequest?.type !== "tool-request") throw new Error("Expected a bridged tool request")
+    expect(first).toContainEqual({ type: "done", reason: "tool-calls" })
+    expect(disposals).toBe(0)
+
+    const second = await Array.fromAsync(
+      bridge({
+        modelID: asCatalogModelID("composer-2.5"),
+        scope,
+        tools,
+        conversation: {
+          ...firstConversation,
+          turns: [
+            ...firstConversation.turns,
+            {
+              role: "assistant",
+              parts: [{ type: "tool-call", id: toolRequest.id, name: "docs_search", input: '{"query":"Cursor"}' }],
+            },
+            {
+              role: "tool",
+              parts: [
+                {
+                  type: "tool-result",
+                  id: toolRequest.id,
+                  name: "docs_search",
+                  output: [{ type: "text", text: "Cursor documentation" }],
+                  isError: false,
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    )
+
+    expect(second).toContainEqual({
+      type: "text",
+      delta: 'Found: {"content":[{"type":"text","text":"Cursor documentation"}]}',
+    })
+    expect(second).toContainEqual({ type: "done", reason: "stop", metadata: expect.any(Object) })
+    expect({ opens, sends, disposals }).toEqual({ opens: 1, sends: 1, disposals: 1 })
+  })
+
   test("uses RunResult usage when the stream has no usage message", async () => {
     const events = await eventsFrom(
       runner(
@@ -170,6 +284,21 @@ describe("runTurn", () => {
       controller.signal,
     )
     expect(events).toEqual([{ type: "failed", error: { kind: "cancelled" } }])
+    expect(opened).toEqual([])
+  })
+
+  test("rejects OpenCode tools without a session scope", async () => {
+    const opened: Array<unknown> = []
+    const events = await Array.fromAsync(
+      runner(fakeRun(), [], [], [], createBindingStore(), opened)({
+        modelID: asCatalogModelID("composer-2.5"),
+        scope: undefined,
+        conversation: { system: [], turns: [{ role: "user", parts: [{ type: "text", text: "hello" }] }] },
+        tools: [{ name: "docs_search", inputSchema: { type: "object" } }],
+      }),
+    )
+
+    expect(events).toEqual([{ type: "failed", error: { kind: "unsupported-request", reason: "tools-requested" } }])
     expect(opened).toEqual([])
   })
 

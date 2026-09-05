@@ -22,7 +22,7 @@ export function createResponseJournal(): ResponseJournal {
         }
         return event
       }
-      if (event.type === "tool-call") {
+      if (event.type === "tool-call" || event.type === "tool-request") {
         if (toolCalls.has(event.id)) return undefined
         toolCalls.add(event.id)
         parts.push({ type: "tool-call", id: event.id, name: event.name, input: canonicalJson(event.input) })

@@ -15,6 +15,8 @@ function modelFor(events: readonly TurnEvent[], requests: TurnRequest[] = []) {
       requests.push(request)
       yield* events
     },
+    async dispose() {},
+    async cancel() {},
   }
   return toLanguageModel({
     bridge,
@@ -82,6 +84,23 @@ describe("Cursor language model", () => {
     expect(parts.filter((part) => part.type === "tool-result")).toHaveLength(1)
   })
 
+  test("returns OpenCode tool requests for OpenCode to execute", async () => {
+    const result = await modelFor([
+      { type: "tool-request", id: "bridge-call", name: "docs_search", input: { query: "Cursor" } },
+      { type: "done", reason: "tool-calls" },
+    ]).doGenerate(call)
+
+    expect(result.content).toEqual([
+      {
+        type: "tool-call",
+        toolCallId: "bridge-call",
+        toolName: "docs_search",
+        input: '{"query":"Cursor"}',
+      },
+    ])
+    expect(result.finishReason).toEqual({ unified: "tool-calls", raw: "tool-calls" })
+  })
+
   test("uses a unique ID when an output block type resumes", async () => {
     const { stream } = await modelFor([
       { type: "text", delta: "one" },
@@ -127,6 +146,41 @@ describe("Cursor language model", () => {
     const requests: TurnRequest[] = []
     await modelFor([{ type: "done", reason: "stop" }], requests).doGenerate(call)
     expect(requests[0]?.params).toEqual([{ id: "thinking", value: "high" }])
+  })
+
+  test("passes OpenCode tools into the Cursor turn", async () => {
+    const requests: TurnRequest[] = []
+    await modelFor([{ type: "done", reason: "stop" }], requests).doGenerate({
+      ...call,
+      tools: [
+        {
+          type: "function",
+          name: "docs_search",
+          description: "Search the documentation",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    })
+
+    expect(requests[0]).toMatchObject({
+      tools: [
+        {
+          name: "docs_search",
+          description: "Search the documentation",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    })
   })
 
   test("passes image input into the Cursor turn", async () => {
@@ -350,6 +404,8 @@ describe("Cursor language model", () => {
         yield { type: "text", delta: "partial" }
         throw new Error("boom")
       },
+      async dispose() {},
+      async cancel() {},
     }
     const { stream } = await toLanguageModel({
       bridge,
@@ -380,6 +436,8 @@ describe("Cursor language model", () => {
         })
         yield { type: "failed", error: { kind: "cancelled" } }
       },
+      async dispose() {},
+      async cancel() {},
     }
     const { stream } = await toLanguageModel({
       bridge,
