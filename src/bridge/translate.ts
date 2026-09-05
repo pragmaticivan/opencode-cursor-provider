@@ -2,6 +2,13 @@ import type { SDKMessage } from "@cursor/sdk"
 import type { CursorPluginError } from "../errors.ts"
 
 export type TurnEvent =
+  | { readonly type: "raw"; readonly value: SDKMessage }
+  | {
+      readonly type: "response-metadata"
+      readonly id: string
+      readonly timestamp?: number
+      readonly modelId?: string
+    }
   | { readonly type: "text"; readonly delta: string }
   | { readonly type: "reasoning"; readonly delta: string }
   | { readonly type: "tool-call"; readonly id: string; readonly name: string; readonly input: JsonValue }
@@ -19,14 +26,38 @@ export type TurnEvent =
       readonly cacheRead: number
       readonly cacheWrite: number
       readonly reasoning: number
+      readonly total: number
     }
-  | { readonly type: "done"; readonly reason: "stop" | "length" | "aborted" }
+  | {
+      readonly type: "done"
+      readonly reason: "stop" | "length" | "aborted"
+      readonly metadata?: {
+        readonly runId: string
+        readonly requestId?: string
+        readonly durationMs?: number
+        readonly modelId?: string
+        readonly git?: readonly {
+          readonly repoUrl: string
+          readonly branch?: string
+          readonly prUrl?: string
+        }[]
+      }
+    }
   | { readonly type: "failed"; readonly error: CursorPluginError }
 
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue }
 type NonNullJsonValue = Exclude<JsonValue, null>
 
 export function translate(message: SDKMessage): readonly TurnEvent[] {
+  return translateMessage(message, new Map())
+}
+
+export function createMessageTranslator(): (message: SDKMessage) => readonly TurnEvent[] {
+  const toolInputs = new Map<string, unknown>()
+  return (message) => translateMessage(message, toolInputs)
+}
+
+function translateMessage(message: SDKMessage, toolInputs: Map<string, unknown>): readonly TurnEvent[] {
   switch (message.type) {
     case "assistant": {
       const events: TurnEvent[] = []
@@ -34,24 +65,52 @@ export function translate(message: SDKMessage): readonly TurnEvent[] {
         if (block.type === "text" && block.text.length > 0) {
           events.push({ type: "text", delta: block.text })
         }
-        if (block.type === "tool_use") {
-          const tool = nativeTool(block.name, block.input)
-          events.push({ type: "tool-call", id: block.id, name: tool.name, input: tool.input })
-        }
+        if (block.type === "tool_use") toolInputs.set(block.id, block.input)
       }
       return events
     }
     case "thinking":
       return message.text.length > 0 ? [{ type: "reasoning", delta: message.text }] : []
     case "tool_call": {
-      const tool = nativeTool(message.name, message.args)
+      if (message.status === "running") {
+        if (message.args !== undefined && message.truncated?.args !== true) {
+          toolInputs.set(message.call_id, message.args)
+        }
+        return []
+      }
+      const cachedInput = toolInputs.get(message.call_id)
+      const hasCachedInput = toolInputs.has(message.call_id)
+      toolInputs.delete(message.call_id)
+      if (message.truncated?.args === true && !hasCachedInput) {
+        return [
+          {
+            type: "failed",
+            error: {
+              kind: "agent-run-failed",
+              detail: `Cursor truncated the input for tool call ${message.call_id}.`,
+            },
+          },
+        ]
+      }
+      if (message.truncated?.result === true) {
+        return [
+          {
+            type: "failed",
+            error: {
+              kind: "agent-run-failed",
+              detail: `Cursor truncated the result for tool call ${message.call_id}.`,
+            },
+          },
+        ]
+      }
+      const input = message.truncated?.args === true || message.args === undefined ? cachedInput : message.args
+      const tool = nativeTool(message.name, input)
       const call: TurnEvent = {
         type: "tool-call",
         id: message.call_id,
         name: tool.name,
         input: tool.input,
       }
-      if (message.status === "running") return [call]
       const result = cursorResult(message.result)
       return [
         call,
@@ -73,6 +132,7 @@ export function translate(message: SDKMessage): readonly TurnEvent[] {
           cacheRead: message.usage.cacheReadTokens ?? 0,
           cacheWrite: message.usage.cacheWriteTokens ?? 0,
           reasoning: message.usage.reasoningTokens ?? 0,
+          total: message.usage.totalTokens ?? 0,
         },
       ]
     case "status":

@@ -1,18 +1,36 @@
-import { AuthenticationError, CursorAgentError, type ModelParameterValue, type TokenUsage } from "@cursor/sdk"
+import {
+  AuthenticationError,
+  CursorAgentError,
+  type AgentModeOption,
+  type ModelParameterValue,
+  type SDKUserMessage,
+  type TokenUsage,
+} from "@cursor/sdk"
 import type { CursorLink } from "../auth/link.ts"
 import { resolveWireId, type CursorModelDescriptor } from "../catalog/catalog.ts"
 import { nowMs, type CatalogModelID, type CursorApiKey } from "../ids.ts"
+import type { CursorAgentOptions } from "../model/provider-options.ts"
 import { isAgentLost, openCursorAgent } from "./agent.ts"
 import { route, type BindingStore, type RouteKind, type SessionAgentBinding, type TurnScope } from "./binding.ts"
-import { newUserTurns, render, userTurns, type Conversation } from "./conversation.ts"
+import {
+  checkpointOf,
+  cursorMessage,
+  resumeTurn,
+  type AssistantPart,
+  type Conversation,
+} from "./conversation.ts"
 import type { KeyedLock } from "./lock.ts"
-import { translate, type TurnEvent } from "./translate.ts"
+import { createResponseJournal } from "./response-journal.ts"
+import { createMessageTranslator, type TurnEvent } from "./translate.ts"
 
 export interface TurnRequest {
   readonly modelID: CatalogModelID
   readonly scope: TurnScope | undefined
   readonly conversation: Conversation
   readonly params?: readonly ModelParameterValue[]
+  readonly mode?: AgentModeOption
+  readonly agentOptions?: CursorAgentOptions
+  readonly includeRawChunks?: boolean
   readonly signal?: AbortSignal
 }
 
@@ -31,7 +49,7 @@ interface TurnPlan {
   readonly params: readonly ModelParameterValue[] | undefined
   readonly kind: RouteKind
   readonly binding: SessionAgentBinding | undefined
-  readonly prompt: string
+  readonly prompt: string | SDKUserMessage
 }
 
 export function createTurnRunner(ctx: TurnRunnerContext): (request: TurnRequest) => AsyncIterable<TurnEvent> {
@@ -56,7 +74,7 @@ async function* runTurn(ctx: TurnRunnerContext, request: TurnRequest): AsyncGene
     }
 
     let plan = planTurn(request, apiKey, wireID, ctx.bindings)
-    if (plan.prompt.trim().length === 0) {
+    if (typeof plan.prompt === "string" && plan.prompt.trim().length === 0) {
       yield { type: "done", reason: "stop" }
       return
     }
@@ -64,15 +82,32 @@ async function* runTurn(ctx: TurnRunnerContext, request: TurnRequest): AsyncGene
     let retryLost = true
     while (true) {
       let session: Awaited<ReturnType<typeof openCursorAgent>> | undefined
+      let emitted = false
       try {
+        if (request.signal?.aborted) {
+          yield { type: "failed", error: { kind: "cancelled" } }
+          return
+        }
         session = await (ctx.openAgent ?? openCursorAgent)({
           apiKey: plan.apiKey,
           wireID: plan.wireID,
           params: plan.params,
           cwd: request.scope?.cwd ?? process.cwd(),
           resume: plan.kind === "RESUME" ? plan.binding?.agentID : undefined,
+          agentOptions: request.agentOptions,
         })
-        const run = await session.send(plan.prompt)
+        if (request.signal?.aborted) {
+          yield { type: "failed", error: { kind: "cancelled" } }
+          return
+        }
+        const run = await session.send(plan.prompt, request.mode === undefined ? undefined : { mode: request.mode })
+        emitted = true
+        yield {
+          type: "response-metadata",
+          id: run.id,
+          ...(run.createdAt === undefined ? {} : { timestamp: run.createdAt }),
+          modelId: run.model?.id ?? plan.wireID,
+        }
         let cancelPromise: Promise<void> | undefined
         const cancel = () => {
           if (cancelPromise !== undefined || !run.supports("cancel")) return
@@ -82,13 +117,18 @@ async function* runTurn(ctx: TurnRunnerContext, request: TurnRequest): AsyncGene
         if (request.signal?.aborted) cancel()
 
         let sawUsage = false
+        const response = createResponseJournal()
+        const translate = createMessageTranslator()
         try {
           for await (const message of run.stream()) {
             if (request.signal?.aborted) {
               yield { type: "failed", error: { kind: "cancelled" } }
               return
             }
-            for (const event of translate(message)) {
+            if (request.includeRawChunks === true) yield { type: "raw", value: message }
+            for (const candidate of translate(message)) {
+              const event = response.accept(candidate)
+              if (event === undefined) continue
               if (event.type === "usage") sawUsage = true
               yield event
             }
@@ -113,16 +153,28 @@ async function* runTurn(ctx: TurnRunnerContext, request: TurnRequest): AsyncGene
             return
           }
 
-          yield { type: "done", reason: "stop" }
           if (request.scope && plan.kind !== "ONE_SHOT") {
             ctx.bindings.put({
               sessionID: request.scope.sessionID,
               agentID: session.id,
               modelID: request.modelID,
               cwd: request.scope.cwd,
-              forwardedTurns: userTurns(request.conversation),
+              checkpoint: checkpointOf(withResponse(request.conversation, response.parts())),
+              params: request.params,
+              mode: request.mode,
+              agentOptions: request.agentOptions,
               lastUsedAt: nowMs(ctx.clock),
             })
+          }
+          yield {
+            type: "done",
+            reason: "stop",
+            metadata: {
+              runId: result.id,
+              ...(result.requestId === undefined ? {} : { requestId: result.requestId }),
+              ...(result.durationMs === undefined ? {} : { durationMs: result.durationMs }),
+              ...(result.model === undefined ? {} : { modelId: result.model.id }),
+            },
           }
           return
         } finally {
@@ -130,7 +182,7 @@ async function* runTurn(ctx: TurnRunnerContext, request: TurnRequest): AsyncGene
           await cancelPromise
         }
       } catch (error) {
-        if (retryLost && plan.kind === "RESUME" && request.scope && isAgentLost(error)) {
+        if (retryLost && !emitted && plan.kind === "RESUME" && request.scope && isAgentLost(error)) {
           retryLost = false
           ctx.bindings.drop(request.scope.sessionID)
           plan = {
@@ -152,6 +204,14 @@ async function* runTurn(ctx: TurnRunnerContext, request: TurnRequest): AsyncGene
   }
 }
 
+function withResponse(
+  conversation: Conversation,
+  parts: readonly AssistantPart[],
+): Conversation {
+  if (parts.length === 0) return conversation
+  return { ...conversation, turns: [...conversation.turns, { role: "assistant", parts }] }
+}
+
 function planTurn(
   request: TurnRequest,
   apiKey: CursorApiKey,
@@ -163,7 +223,10 @@ function planTurn(
     scope: request.scope,
     binding,
     modelID: request.modelID,
-    userTurns: userTurns(request.conversation),
+    conversation: request.conversation,
+    params: request.params,
+    mode: request.mode,
+    agentOptions: request.agentOptions,
   })
   return {
     apiKey,
@@ -183,14 +246,20 @@ function usageEvent(usage: TokenUsage): Extract<TurnEvent, { type: "usage" }> {
     cacheRead: usage.cacheReadTokens,
     cacheWrite: usage.cacheWriteTokens,
     reasoning: usage.reasoningTokens ?? 0,
+    total: usage.totalTokens,
   }
 }
 
-function promptFor(kind: RouteKind, conversation: Conversation, binding: SessionAgentBinding | undefined): string {
+function promptFor(
+  kind: RouteKind,
+  conversation: Conversation,
+  binding: SessionAgentBinding | undefined,
+): string | SDKUserMessage {
   if (kind === "RESUME" && binding) {
-    return render([], newUserTurns(conversation, binding.forwardedTurns))
+    const turn = resumeTurn(conversation, binding.checkpoint)
+    if (turn !== undefined) return cursorMessage([], [turn])
   }
-  return render(conversation.system, conversation.turns)
+  return cursorMessage(conversation.system, conversation.turns)
 }
 
 function failedFromCaught(error: unknown, signal: AbortSignal | undefined, unlink: () => void): TurnEvent {

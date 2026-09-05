@@ -50,16 +50,38 @@ The plugin gets the model list and the model variants from Cursor. The fallback 
 - OpenCode tools stay off for Cursor models.
 - OpenCode shows Cursor tools as provider-executed tool calls.
 - The plugin keeps one Cursor agent for each OpenCode session.
-- The plugin starts a new Cursor agent after a model change, a directory change, or a conversation rewind.
+- The plugin starts a new Cursor agent after a model, directory, mode, conversation, or Cursor agent option change.
 - OpenCode cancellation stops the active Cursor run.
+- You can set Cursor plan mode with `providerOptions.cursor.mode`.
+
+The provider supports these Cursor agent options:
+
+```ts
+providerOptions: {
+	cursor: {
+		mode: "plan",
+		tools: ["read", "grep"],
+		disallowedTools: ["shell"],
+		sandboxOptions: { enabled: true },
+		autoReview: true,
+		settingSources: ["project", "team"],
+	},
+}
+```
+
+The `tools` and `disallowedTools` options apply only to Cursor tools. They do not add OpenCode tools.
+
+Because Cursor settings can load MCP servers, select only settings layers that you trust.
 
 ## Current limits
 
-- The plugin supports text input and text output.
-- The plugin rejects file and image input. It does not discard the input.
+- The plugin supports text and local image input. It supports text output.
+- The plugin rejects image URLs and non-image file input. It does not discard the input.
 - The plugin rejects structured output requests.
-- OpenCode sampling settings do not change Cursor model parameters.
+- The plugin rejects OpenCode tools and explicit tool choice.
+- OpenCode sampling settings do not change Cursor model parameters. The plugin reports those settings as unsupported.
 - Cursor controls tool access and tool approval for its tools.
+- The plugin does not expose Cursor MCP servers, custom tools, extra workspace roots, or a replacement system prompt.
 
 ## Credentials
 
@@ -87,4 +109,4 @@ The source code is in `src/`. The build writes the package files to `dist/`.
 
 ## License
 
-MIT
+Apache License 2.0. See [`LICENSE`](LICENSE).

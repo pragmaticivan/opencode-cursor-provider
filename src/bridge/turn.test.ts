@@ -1,8 +1,9 @@
-import type { ModelParameterValue, Run, RunResult } from "@cursor/sdk"
+import type { ModelParameterValue, Run, RunResult, SDKUserMessage, SendOptions } from "@cursor/sdk"
 import { describe, expect, test } from "bun:test"
 import { SEED_MODELS } from "../catalog/catalog.ts"
-import { asAgentID, asApiKey, asCatalogModelID } from "../ids.ts"
-import { createBindingStore } from "./binding.ts"
+import { asAgentID, asApiKey, asCatalogModelID, asEpochMs, asSessionID } from "../ids.ts"
+import { createBindingStore, route } from "./binding.ts"
+import { checkpointOf } from "./conversation.ts"
 import { createLock } from "./lock.ts"
 import { createTurnRunner } from "./turn.ts"
 
@@ -39,7 +40,14 @@ function fakeRun(input: {
   }
 }
 
-function runner(run: Run, receivedParams: Array<readonly ModelParameterValue[]> = []) {
+function runner(
+  run: Run,
+  receivedParams: Array<readonly ModelParameterValue[]> = [],
+  receivedMessages: Array<string | SDKUserMessage> = [],
+  receivedSendOptions: SendOptions[] = [],
+  bindings = createBindingStore(),
+  receivedAgentOptions: Array<unknown> = [],
+) {
   return createTurnRunner({
     link: {
       async resolve() {
@@ -53,14 +61,17 @@ function runner(run: Run, receivedParams: Array<readonly ModelParameterValue[]> 
       },
     },
     models: () => SEED_MODELS,
-    bindings: createBindingStore(),
+    bindings,
     clock: () => 1,
     lock: createLock(),
     async openAgent(input) {
       receivedParams.push(input.params ?? [])
+      receivedAgentOptions.push(input.agentOptions)
       return {
         id: asAgentID("agent-id"),
-        async send() {
+        async send(message, options) {
+          receivedMessages.push(message)
+          if (options !== undefined) receivedSendOptions.push(options)
           return run
         },
         async dispose() {},
@@ -74,7 +85,7 @@ async function eventsFrom(run: ReturnType<typeof runner>, signal?: AbortSignal) 
     run({
       modelID: asCatalogModelID("composer-2.5"),
       scope: undefined,
-      conversation: { system: [], turns: [{ role: "user", text: "hello" }] },
+      conversation: { system: [], turns: [{ role: "user", parts: [{ type: "text", text: "hello" }] }] },
       params: [{ id: "thinking", value: "high" }],
       ...(signal === undefined ? {} : { signal }),
     }),
@@ -106,6 +117,7 @@ describe("runTurn", () => {
       cacheRead: 20,
       cacheWrite: 10,
       reasoning: 15,
+      total: 140,
     })
   })
 
@@ -113,7 +125,8 @@ describe("runTurn", () => {
     const events = await eventsFrom(
       runner(fakeRun({ result: runResult({ status: "error", error: { message: "backend failed" } }) })),
     )
-    expect(events).toEqual([{ type: "failed", error: { kind: "agent-run-failed", detail: "backend failed" } }])
+    expect(events).toContainEqual({ type: "failed", error: { kind: "agent-run-failed", detail: "backend failed" } })
+    expect(events.some((event) => event.type === "done")).toBe(false)
   })
 
   test("cancels a quiet run immediately and only once", async () => {
@@ -122,9 +135,14 @@ describe("runTurn", () => {
     const quiet = new Promise<void>((resolve) => {
       release = resolve
     })
+    let startedResolve: () => void = () => {}
+    const started = new Promise<void>((resolve) => {
+      startedResolve = resolve
+    })
     let cancellations = 0
     const run = fakeRun({
       messages: async function* () {
+        startedResolve()
         await quiet
       },
       result: runResult({ status: "cancelled" }),
@@ -135,18 +153,195 @@ describe("runTurn", () => {
     })
 
     const pending = eventsFrom(runner(run), controller.signal)
-    await Promise.resolve()
-    await Promise.resolve()
+    await started
     controller.abort()
     controller.abort()
 
-    expect(await pending).toEqual([{ type: "failed", error: { kind: "cancelled" } }])
+    expect(await pending).toContainEqual({ type: "failed", error: { kind: "cancelled" } })
     expect(cancellations).toBe(1)
+  })
+
+  test("does not start a run for a request that is already cancelled", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const opened: Array<unknown> = []
+    const events = await eventsFrom(
+      runner(fakeRun(), [], [], [], createBindingStore(), opened),
+      controller.signal,
+    )
+    expect(events).toEqual([{ type: "failed", error: { kind: "cancelled" } }])
+    expect(opened).toEqual([])
   })
 
   test("forwards selected model parameters", async () => {
     const received: Array<readonly ModelParameterValue[]> = []
     await eventsFrom(runner(fakeRun(), received))
     expect(received).toEqual([[{ id: "thinking", value: "high" }]])
+  })
+
+  test("sends image-only user turns to Cursor", async () => {
+    const received: Array<string | SDKUserMessage> = []
+    const run = runner(fakeRun(), [], received)
+    await Array.fromAsync(
+      run({
+        modelID: asCatalogModelID("composer-2.5"),
+        scope: undefined,
+        conversation: {
+          system: [],
+          turns: [
+            {
+              role: "user",
+              parts: [{ type: "image", image: { data: "aGVsbG8=", mimeType: "image/png" } }],
+            },
+          ],
+        },
+      }),
+    )
+    expect(received).toEqual([
+      { text: "User: [Image 1: image/png]", images: [{ data: "aGVsbG8=", mimeType: "image/png" }] },
+    ])
+  })
+
+  test("forwards Cursor mode and emits requested raw messages", async () => {
+    const receivedOptions: SendOptions[] = []
+    const message = {
+      type: "thinking" as const,
+      agent_id: "agent",
+      run_id: "run",
+      text: "thinking",
+    }
+    const events = await Array.fromAsync(
+      runner(
+        fakeRun({ messages: async function* () { yield message } }),
+        [],
+        [],
+        receivedOptions,
+      )({
+        modelID: asCatalogModelID("composer-2.5"),
+        scope: undefined,
+        conversation: { system: [], turns: [{ role: "user", parts: [{ type: "text", text: "hello" }] }] },
+        mode: "plan",
+        includeRawChunks: true,
+      }),
+    )
+    expect(receivedOptions).toEqual([{ mode: "plan" }])
+    expect(events).toContainEqual({ type: "raw", value: message })
+  })
+
+  test("forwards local Cursor agent options", async () => {
+    const receivedAgentOptions: Array<unknown> = []
+    await Array.fromAsync(
+      runner(fakeRun(), [], [], [], createBindingStore(), receivedAgentOptions)({
+        modelID: asCatalogModelID("composer-2.5"),
+        scope: undefined,
+        conversation: { system: [], turns: [{ role: "user", parts: [{ type: "text", text: "hello" }] }] },
+        agentOptions: {
+          tools: ["read"],
+          sandboxOptions: { enabled: true },
+          autoReview: true,
+          settingSources: ["project"],
+        },
+      }),
+    )
+    expect(receivedAgentOptions).toEqual([
+      {
+        tools: ["read"],
+        sandboxOptions: { enabled: true },
+        autoReview: true,
+        settingSources: ["project"],
+      },
+    ])
+  })
+
+  test("sends only the new user turn when it resumes an agent", async () => {
+    const bindings = createBindingStore()
+    const scope = { sessionID: asSessionID("ses_resume"), cwd: "/repo" }
+    const previous = {
+      system: ["be brief"],
+      turns: [
+        { role: "user" as const, parts: [{ type: "text" as const, text: "hello" }] },
+        { role: "assistant" as const, parts: [{ type: "text" as const, text: "answer" }] },
+      ],
+    }
+    bindings.put({
+      sessionID: scope.sessionID,
+      agentID: asAgentID("agent-id"),
+      modelID: asCatalogModelID("composer-2.5"),
+      cwd: scope.cwd,
+      checkpoint: checkpointOf(previous),
+      params: undefined,
+      mode: undefined,
+      agentOptions: undefined,
+      lastUsedAt: asEpochMs(1),
+    })
+    const received: Array<string | SDKUserMessage> = []
+    await Array.fromAsync(
+      runner(fakeRun(), [], received, [], bindings)({
+        modelID: asCatalogModelID("composer-2.5"),
+        scope,
+        conversation: {
+          ...previous,
+          turns: [...previous.turns, { role: "user", parts: [{ type: "text", text: "next" }] }],
+        },
+      }),
+    )
+    expect(received).toEqual(["User: next"])
+  })
+
+  test("the saved checkpoint includes the generated assistant response", async () => {
+    const bindings = createBindingStore()
+    const scope = { sessionID: asSessionID("ses_1"), cwd: "/repo" }
+    const message = {
+      type: "assistant" as const,
+      agent_id: "agent",
+      run_id: "run",
+      message: { role: "assistant" as const, content: [{ type: "text" as const, text: "answer" }] },
+    }
+    const run = runner(fakeRun({ messages: async function* () { yield message } }), [], [], [], bindings)
+    await Array.fromAsync(
+      run({
+        modelID: asCatalogModelID("composer-2.5"),
+        scope,
+        conversation: { system: [], turns: [{ role: "user", parts: [{ type: "text", text: "hello" }] }] },
+      }),
+    )
+    const saved = bindings.get(scope.sessionID)
+    expect(saved).toBeDefined()
+    expect(
+      route({
+        scope,
+        binding: saved,
+        modelID: asCatalogModelID("composer-2.5"),
+        conversation: {
+          system: [],
+          turns: [
+            { role: "user", parts: [{ type: "text", text: "hello" }] },
+            { role: "assistant", parts: [{ type: "text", text: "answer" }] },
+            { role: "user", parts: [{ type: "text", text: "next" }] },
+          ],
+        },
+        params: undefined,
+        mode: undefined,
+        agentOptions: undefined,
+      }),
+    ).toBe("RESUME")
+    expect(
+      route({
+        scope,
+        binding: saved,
+        modelID: asCatalogModelID("composer-2.5"),
+        conversation: {
+          system: [],
+          turns: [
+            { role: "user", parts: [{ type: "text", text: "hello" }] },
+            { role: "assistant", parts: [{ type: "text", text: "changed" }] },
+            { role: "user", parts: [{ type: "text", text: "next" }] },
+          ],
+        },
+        params: undefined,
+        mode: undefined,
+        agentOptions: undefined,
+      }),
+    ).toBe("FRESH")
   })
 })

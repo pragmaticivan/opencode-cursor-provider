@@ -1,6 +1,6 @@
 import type { SDKAssistantMessage, SDKThinkingMessage, SDKToolUseMessage, SDKUsageMessage } from "@cursor/sdk"
 import { describe, expect, test } from "bun:test"
-import { translate } from "./translate.ts"
+import { createMessageTranslator, translate } from "./translate.ts"
 
 const assistant: SDKAssistantMessage = {
   type: "assistant",
@@ -45,14 +45,24 @@ describe("translate", () => {
     expect(translate(assistant)).toEqual([{ type: "text", delta: "hello" }])
   })
 
+  test("assistant tool blocks wait for the final tool event", () => {
+    expect(
+      translate({
+        ...assistant,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call", name: "read", input: {} }],
+        },
+      }),
+    ).toEqual([])
+  })
+
   test("thinking becomes reasoning", () => {
     expect(translate(thinking)).toEqual([{ type: "reasoning", delta: "Inspect the provider boundary." }])
   })
 
-  test("running tools retain their identity and input", () => {
-    expect(translate(tool)).toEqual([
-      { type: "tool-call", id: "call", name: "edit", input: { filePath: "src/index.ts" } },
-    ])
+  test("running tools wait for their final input", () => {
+    expect(translate(tool)).toEqual([])
   })
 
   test("completed tools include their result", () => {
@@ -68,10 +78,49 @@ describe("translate", () => {
     ])
   })
 
-  test("maps Cursor tool fields to native OpenCode fields", () => {
-    expect(translate({ ...tool, name: "read", args: { path: "src/index.ts" } })).toEqual([
-      { type: "tool-call", id: "call", name: "read", input: { filePath: "src/index.ts" } },
+  test("a terminal tool event uses complete arguments from an earlier update", () => {
+    const translateMessage = createMessageTranslator()
+    expect(translateMessage(tool)).toEqual([])
+    expect(translateMessage({ ...tool, status: "completed", args: undefined, result: "ok" })[0]).toEqual({
+      type: "tool-call",
+      id: "call",
+      name: "edit",
+      input: { filePath: "src/index.ts" },
+    })
+  })
+
+  test("rejects truncated tool input when no complete input exists", () => {
+    const translateMessage = createMessageTranslator()
+    expect(
+      translateMessage({ ...tool, status: "completed", args: { path: "src" }, result: "ok", truncated: { args: true } }),
+    ).toEqual([
+      {
+        type: "failed",
+        error: { kind: "agent-run-failed", detail: "Cursor truncated the input for tool call call." },
+      },
     ])
+  })
+
+  test("rejects truncated tool results", () => {
+    expect(
+      createMessageTranslator()({
+        ...tool,
+        status: "completed",
+        result: "partial",
+        truncated: { result: true },
+      }),
+    ).toEqual([
+      {
+        type: "failed",
+        error: { kind: "agent-run-failed", detail: "Cursor truncated the result for tool call call." },
+      },
+    ])
+  })
+
+  test("maps Cursor tool fields to native OpenCode fields", () => {
+    expect(
+      translate({ ...tool, name: "read", status: "completed", args: { path: "src/index.ts" }, result: "ok" })[0],
+    ).toEqual({ type: "tool-call", id: "call", name: "read", input: { filePath: "src/index.ts" } })
   })
 
   test("unwraps Cursor results into native text output", () => {
@@ -137,6 +186,7 @@ describe("translate", () => {
         cacheRead: 20,
         cacheWrite: 10,
         reasoning: 15,
+        total: 140,
       },
     ])
   })

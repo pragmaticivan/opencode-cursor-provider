@@ -1,6 +1,13 @@
 import type { CursorAgentID, EpochMs } from "./ids.ts"
 
-export type UnsupportedReason = "tools-requested" | "structured-output" | "multiple-completions" | "file-input"
+export type UnsupportedReason =
+  | "tools-requested"
+  | "tool-choice"
+  | "structured-output"
+  | "multiple-completions"
+  | "file-input"
+  | "tool-result-content"
+  | "provider-option"
 
 export type CursorPluginError =
   | { readonly kind: "not-linked" }
