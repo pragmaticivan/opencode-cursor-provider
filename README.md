@@ -47,8 +47,9 @@ The plugin gets the model list and the model variants from Cursor. The fallback 
 ## How the plugin works
 
 - Cursor runs its own tools and changes the workspace.
-- OpenCode tools stay off for Cursor models.
 - OpenCode shows Cursor tools as provider-executed tool calls.
+- The plugin exposes OpenCode tools to Cursor with an `opencode__` prefix for each run.
+- OpenCode executes bridged tools through its normal permissions, hooks, and MCP connections.
 - The plugin keeps one Cursor agent for each OpenCode session.
 - The plugin starts a new Cursor agent after a model, directory, mode, conversation, or Cursor agent option change.
 - OpenCode cancellation stops the active Cursor run.
@@ -69,7 +70,7 @@ providerOptions: {
 }
 ```
 
-The `tools` and `disallowedTools` options apply only to Cursor tools. They do not add OpenCode tools.
+The `tools` and `disallowedTools` options apply only to Cursor tools. OpenCode controls its bridged tools separately.
 
 Because Cursor settings can load MCP servers, select only settings layers that you trust.
 
@@ -78,10 +79,12 @@ Because Cursor settings can load MCP servers, select only settings layers that y
 - The plugin supports text and local image input. It supports text output.
 - The plugin rejects image URLs and non-image file input. It does not discard the input.
 - The plugin rejects structured output requests.
-- The plugin rejects OpenCode tools and explicit tool choice.
+- The plugin rejects explicit tool choice.
+- Tool bridging requires an OpenCode session. One-shot model calls cannot use OpenCode tools.
 - OpenCode sampling settings do not change Cursor model parameters. The plugin reports those settings as unsupported.
 - Cursor controls tool access and tool approval for its tools.
-- The plugin does not expose Cursor MCP servers, custom tools, extra workspace roots, or a replacement system prompt.
+- OpenCode controls permission checks for bridged OpenCode tools.
+- The plugin does not accept user-defined Cursor custom tools, extra workspace roots, or a replacement system prompt.
 
 ## Credentials
 

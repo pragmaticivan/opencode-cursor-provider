@@ -6,6 +6,7 @@ import {
   extendsCheckpoint,
   render,
   resumeTurn,
+  toolResultsAfter,
   type Conversation,
 } from "./conversation.ts"
 
@@ -132,5 +133,44 @@ describe("conversation", () => {
         checkpoint,
       ),
     ).toBe(false)
+  })
+
+  test("accepts only the expected tool results after a checkpoint", () => {
+    const checkpoint = checkpointOf(conversation)
+    const continued: Conversation = {
+      ...conversation,
+      turns: [
+        ...conversation.turns,
+        {
+          role: "tool",
+          parts: [
+            {
+              type: "tool-result",
+              id: "bridge-1",
+              name: "docs_search",
+              output: [{ type: "text", text: "found" }],
+              isError: false,
+            },
+          ],
+        },
+      ],
+    }
+
+    expect(toolResultsAfter(continued, checkpoint, [{ id: "bridge-1", name: "docs_search" }])).toEqual([
+      {
+        type: "tool-result",
+        id: "bridge-1",
+        name: "docs_search",
+        output: [{ type: "text", text: "found" }],
+        isError: false,
+      },
+    ])
+    expect(toolResultsAfter(continued, checkpoint, [{ id: "stale-call", name: "docs_search" }])).toBeUndefined()
+    expect(toolResultsAfter(continued, checkpoint, [{ id: "bridge-1", name: "wrong_tool" }])).toBeUndefined()
+    expect(
+      toolResultsAfter({ ...continued, system: ["changed"] }, checkpoint, [
+        { id: "bridge-1", name: "docs_search" },
+      ]),
+    ).toBeUndefined()
   })
 })

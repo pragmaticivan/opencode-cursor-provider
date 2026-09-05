@@ -73,7 +73,7 @@ The Cursor server also gates this option. The provider sends system instructions
 
 Cursor owns its built-in tools, approvals, and workspace changes. OpenCode shows this activity as provider-executed tool activity.
 
-The provider does not map OpenCode tools to Cursor custom tools. Such a map would mix the two tool systems.
+The provider exposes OpenCode tools as run-scoped Cursor custom tools with an `opencode__` prefix. OpenCode executes each bridged call through its normal tool pipeline.
 
 ### Reject URL images
 
@@ -106,7 +106,7 @@ The provider advertises no supported URL patterns. It rejects URL images instead
 - Support Cursor settings layers.
 - Reject invalid Cursor modes.
 - Reject structured output requests.
-- Reject nonempty OpenCode tool lists.
+- Bridge OpenCode function tools through run-scoped Cursor custom tools.
 - Reject an explicit nonautomatic tool choice.
 - Warn for standard generation controls that Cursor ignores.
 - Warn for nonempty request headers that Cursor ignores.
@@ -132,6 +132,8 @@ The provider advertises no supported URL patterns. It rejects URL images instead
 
 - Bind one OpenCode session to one Cursor agent.
 - Use a keyed lock for each OpenCode session.
+- Keep a Cursor run active while OpenCode executes a bridged tool.
+- Validate the tool-result continuation against the exact conversation checkpoint.
 - Start one-shot calls without a session binding.
 - Send only the new user turn to a resumed Cursor agent.
 - Replay the full structured transcript to a fresh Cursor agent.
@@ -173,11 +175,11 @@ This audit uses the public interface of `@cursor/sdk` 1.0.31. Internal protocol 
 | 🧰 | Fine-grained text and reasoning deltas | Uses `Run.stream()` messages. | `SendOptions.onDelta` exposes text and reasoning deltas. | `SendOptions.onDelta`, `InteractionUpdate` |
 | 🧰 | Tool input progress | Emits complete provider-executed tool calls. | `onDelta` exposes partial tool calls and tool-call delta updates. The provider does not consume them. | `PartialToolCallUpdate`, `ToolCallDeltaUpdate` |
 | 🧰 | Structured run history | Builds its own checkpoint transcript. | `Run.conversation()` returns structured turns after a run. It does not import prior turns. | `Run.conversation()`, `ConversationTurn` |
-| 🧰 | OpenCode function tools | Rejects nonempty tool lists. | The SDK supports local callback tools, but the project keeps Cursor tools separate from OpenCode tools. | `LocalAgentOptions.customTools` |
+| ✅ | OpenCode function tools | Exposes prefixed tools as run-scoped callbacks. OpenCode executes each returned tool call. | The SDK supports per-send local callback tools. | `LocalSendOptions.customTools` |
 | 🧰 | OpenCode provider tools | Rejects nonempty tool lists. | The SDK supports Cursor tools and MCP tools, not OpenCode provider-tool semantics. | `AgentOptions.tools`, `mcpServers` |
 | ⚠️ | Explicit tool choice | Rejects nonautomatic choices. | Cursor can restrict a tool set, but it cannot express every AI SDK tool-choice mode. | `AgentOptions.tools`, `disallowedTools` |
 | ✅ | Cursor built-in tool controls | Supports `cursor.tools` and `cursor.disallowedTools`. | Local agents support tool allowlists and denylists. | `AgentOptions.tools`, `disallowedTools` |
-| 🧰 | Cursor custom tools | Does not expose custom tools. | Local agents support agent-level and per-send callback tools. | `LocalAgentOptions.customTools`, `LocalSendOptions.customTools` |
+| ✅ | Cursor custom tools | Uses per-send callbacks internally to bridge OpenCode tools. | Local agents support agent-level and per-send callback tools. | `LocalAgentOptions.customTools`, `LocalSendOptions.customTools` |
 | 🧰 | Cursor MCP server configuration | Does not map request options to MCP servers. | The SDK supports agent-level and per-send MCP server definitions. | `AgentOptions.mcpServers`, `SendOptions.mcpServers` |
 | ✅ | Cursor sandbox selection | Supports `cursor.sandboxOptions`. | Local agents expose `sandboxOptions`. | `LocalAgentOptions.sandboxOptions` |
 | ✅ | Cursor automatic review | Supports `cursor.autoReview`. | Local agents expose `autoReview`. | `LocalAgentOptions.autoReview` |

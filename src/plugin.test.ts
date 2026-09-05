@@ -27,6 +27,7 @@ test("model watcher cleanup waits for refresh and blocks buffered triggers", asy
   let closes = 0
   let unlinks = 0
   let subscriptionSawAbort = false
+  let handledEvents = 0
   let cleanupFinished = false
   const stop = watchModels({
     onLinked(listener) {
@@ -39,6 +40,9 @@ test("model watcher cleanup waits for refresh and blocks buffered triggers", asy
       await bufferedEvent.promise
       subscriptionSawAbort = signal.aborted
       yield { type: "credential.updated" }
+    },
+    onEvent() {
+      handledEvents += 1
     },
     refresh() {
       refreshes += 1
@@ -67,5 +71,6 @@ test("model watcher cleanup waits for refresh and blocks buffered triggers", asy
   expect(closes).toBe(1)
   expect(unlinks).toBe(1)
   expect(subscriptionSawAbort).toBe(true)
+  expect(handledEvents).toBe(1)
   expect(cleanupFinished).toBe(true)
 })

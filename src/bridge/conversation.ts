@@ -75,6 +75,33 @@ export function extendsCheckpoint(conversation: Conversation, checkpoint: Conver
   return resumeTurn(conversation, checkpoint) !== undefined
 }
 
+export function toolResultsAfter(
+  conversation: Conversation,
+  checkpoint: ConversationCheckpoint,
+  calls: readonly { readonly id: string; readonly name: string }[],
+): readonly Extract<ToolPart, { type: "tool-result" }>[] | undefined {
+  if (digest(conversation.system) !== checkpoint.system) return undefined
+  if (conversation.turns.length !== checkpoint.turns.length + 1) return undefined
+  for (let index = 0; index < checkpoint.turns.length; index += 1) {
+    const turn = conversation.turns[index]
+    if (turn === undefined || digest(turn) !== checkpoint.turns[index]) return undefined
+  }
+  const suffix = conversation.turns.at(-1)
+  if (suffix?.role !== "tool") return undefined
+  if (suffix.parts.length !== calls.length) return undefined
+  const expected = new Map(calls.map((call) => [call.id, call.name]))
+  if (expected.size !== calls.length) return undefined
+  const found = new Set<string>()
+  const results: Array<Extract<ToolPart, { type: "tool-result" }>> = []
+  for (const part of suffix.parts) {
+    if (part.type !== "tool-result") return undefined
+    if (expected.get(part.id) !== part.name || found.has(part.id)) return undefined
+    found.add(part.id)
+    results.push(part)
+  }
+  return results
+}
+
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(ordered(value)) ?? "null"
 }

@@ -1,5 +1,6 @@
 import type { CursorLink } from "../auth/link.ts"
 import type { CursorModelDescriptor } from "../catalog/catalog.ts"
+import type { OpencodeSessionID } from "../ids.ts"
 import { createBindingStore, type BindingStore, type TurnScope } from "./binding.ts"
 import { stampSystem } from "./correlation.ts"
 import { createLock } from "./lock.ts"
@@ -11,6 +12,8 @@ export type { TurnRequest } from "./turn.ts"
 export interface SessionAgentBridge {
   annotate(system: string[], scope: TurnScope): string[]
   turn(request: TurnRequest): AsyncIterable<TurnEvent>
+  cancel(sessionID: OpencodeSessionID, reason: string): Promise<void>
+  dispose(): Promise<void>
 }
 
 export function createSessionAgentBridge(input: {
@@ -33,6 +36,12 @@ export function createSessionAgentBridge(input: {
     },
     turn(request) {
       return runTurn(request)
+    },
+    cancel(sessionID, reason) {
+      return runTurn.cancel(sessionID, reason)
+    },
+    dispose() {
+      return runTurn.dispose()
     },
   }
 }

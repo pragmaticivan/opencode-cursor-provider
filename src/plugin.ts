@@ -4,7 +4,7 @@ import { createSessionAgentBridge } from "./bridge/bridge.ts"
 import { sessionFromId } from "./bridge/correlation.ts"
 import { applyModels, applyProvider, modelParamsFromOptions } from "./catalog/catalog.ts"
 import { createModelSource } from "./catalog/source.ts"
-import { asCatalogModelID, PROVIDER_ID } from "./ids.ts"
+import { asCatalogModelID, asSessionID, PROVIDER_ID } from "./ids.ts"
 import { toLanguageModel } from "./model/language-model.ts"
 import { bindRuntime } from "./runtime.ts"
 
@@ -49,7 +49,6 @@ export const plugin = Plugin.define({
       await ctx.session.hook(
         "context",
         async (event) => {
-          event.tools = {}
           if (String(event.agent) === "compaction" || String(event.agent) === "title") return
           const stamped = bridge.annotate(
             event.system.map((part) => part.text),
@@ -81,12 +80,17 @@ export const plugin = Plugin.define({
     const stopRefresh = watchModels({
       onLinked: (listener) => link.onLinked(listener),
       subscribe: (signal) => ctx.event.subscribe({ signal }),
+      onEvent: async (event) => {
+        const sessionID = endedSessionID(event)
+        if (sessionID !== undefined) await bridge.cancel(asSessionID(sessionID), "The OpenCode session stopped")
+      },
       refresh: () => models.refresh(),
       close: () => models.close(),
     })
 
     return async () => {
       await stopRefresh()
+      await bridge.dispose()
       for (const registration of registrations.toReversed()) {
         await registration.dispose()
       }
@@ -125,7 +129,8 @@ function writeSystem(system: Array<{ type: "text"; text: string }>, stamped: str
 
 export interface ModelWatcherDependencies {
   onLinked(listener: () => void): () => void
-  subscribe(signal: AbortSignal): AsyncIterable<{ readonly type: string }>
+  subscribe(signal: AbortSignal): AsyncIterable<{ readonly type: string; readonly data?: unknown }>
+  onEvent?(event: { readonly type: string; readonly data?: unknown }): Promise<void> | void
   refresh(): Promise<void>
   close(): Promise<void>
 }
@@ -145,6 +150,7 @@ export function watchModels(dependencies: ModelWatcherDependencies): () => Promi
   const eventTask = (async () => {
     try {
       for await (const event of dependencies.subscribe(events.signal)) {
+        await dependencies.onEvent?.(event)
         if (event.type === "credential.updated" || event.type === "credential.switched") refresh()
       }
     } catch {
@@ -172,4 +178,10 @@ export function watchModels(dependencies: ModelWatcherDependencies): () => Promi
     })()
     return cleanup
   }
+}
+
+function endedSessionID(event: { readonly type: string; readonly data?: unknown }): string | undefined {
+  if (event.type !== "session.idle" && event.type !== "session.deleted") return undefined
+  if (typeof event.data !== "object" || event.data === null || !("sessionID" in event.data)) return undefined
+  return typeof event.data.sessionID === "string" ? event.data.sessionID : undefined
 }
