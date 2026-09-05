@@ -1,0 +1,21 @@
+#!/bin/sh
+# Strip AI co-author trailers. Commits are authored by the user only.
+set -e
+
+msgfile="$1"
+tmp="$(mktemp)"
+
+grep -v -E '^Co-authored-by:[[:space:]]+(Cursor|Claude|GitHub Copilot|Copilot|OpenAI)([[:space:]]+<|$)' "$msgfile" >"$tmp" || true
+
+awk '
+{
+  lines[NR] = $0
+}
+END {
+  end = NR
+  while (end > 0 && lines[end] == "") end--
+  for (i = 1; i <= end; i++) print lines[i]
+}
+' "$tmp" >"$msgfile"
+
+rm -f "$tmp"

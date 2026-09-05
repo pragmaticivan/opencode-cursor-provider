@@ -70,3 +70,5 @@ Do not run an authenticated Cursor request without clear user approval. Do not r
 Keep `README.md` focused on package users. Update it when installation, authentication, model selection, behavior, or limits change.
 
 Use `Conventional Commits`. Keep the subject in the imperative form and at 50 characters or less.
+
+Do not add Cursor, Claude, or any other agent as a commit co-author. Do not include `Co-authored-by` trailers. A `commit-msg` hook in `.githooks` strips those trailers. Enable it with `git config core.hooksPath .githooks`.
