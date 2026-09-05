@@ -62,11 +62,7 @@ describe("translate", () => {
         type: "tool-result",
         id: "call",
         name: "edit",
-        result: {
-          title: "src/index.ts",
-          metadata: { changed: true, output: '{"changed":true}' },
-          output: '{"changed":true}',
-        },
+        result: '{"changed":true}',
         isError: false,
       },
     ])
@@ -96,11 +92,7 @@ describe("translate", () => {
         type: "tool-result",
         id: "call",
         name: "shell",
-        result: {
-          title: "git status",
-          metadata: { output: "working tree clean\n", exit: 0 },
-          output: "working tree clean\n",
-        },
+        result: "working tree clean\n",
         isError: false,
       },
     ])
@@ -130,14 +122,7 @@ describe("translate", () => {
         type: "tool-result",
         id: "call",
         name: "shell",
-        result: {
-          title: "git status",
-          metadata: {
-            output: "fatal: not a git repository (or any of the parent directories): .git\n",
-            exit: 128,
-          },
-          output: "fatal: not a git repository (or any of the parent directories): .git\n",
-        },
+        result: "fatal: not a git repository (or any of the parent directories): .git\n",
         isError: true,
       },
     ])

@@ -59,7 +59,7 @@ export function translate(message: SDKMessage): readonly TurnEvent[] {
           type: "tool-result",
           id: message.call_id,
           name: tool.name,
-          result: resultOutput(tool.name, result.value, tool.input),
+          result: resultOutput(tool.name, result.value),
           isError: message.status === "error" || result.isError,
         },
       ]
@@ -129,29 +129,8 @@ function cursorResult(value: unknown): { value: JsonValue; isError: boolean } {
   return { value: result, isError }
 }
 
-function resultOutput(name: string, value: JsonValue, input: JsonValue): NonNullJsonValue {
-  const output = textOutput(name, value)
-  return {
-    title: toolTitle(name, input),
-    metadata: toolMetadata(name, value, output),
-    output,
-  }
-}
-
-function toolTitle(name: string, input: JsonValue): string {
-  if (name === "shell" && isJsonObject(input) && typeof input.command === "string") return input.command
-  if ((name === "read" || name === "edit" || name === "write") && isJsonObject(input) && typeof input.filePath === "string") {
-    return input.filePath
-  }
-  return name
-}
-
-function toolMetadata(name: string, value: JsonValue, output: string): { [key: string]: JsonValue } {
-  if (name === "shell") {
-    return { output, exit: isJsonObject(value) && typeof value.exitCode === "number" ? value.exitCode : null }
-  }
-  const metadata = isJsonObject(value) ? { ...value } : {}
-  return { ...metadata, output }
+function resultOutput(name: string, value: JsonValue): NonNullJsonValue {
+  return textOutput(name, value)
 }
 
 function textOutput(name: string, value: JsonValue): string {
