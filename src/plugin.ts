@@ -1,9 +1,9 @@
 import { Plugin } from "@opencode-ai/plugin"
-import { createCursorLink, type CursorLink } from "./auth/link.ts"
+import { createCursorLink } from "./auth/link.ts"
 import { createSessionAgentBridge } from "./bridge/bridge.ts"
 import { sessionFromId } from "./bridge/correlation.ts"
 import { applyModels, applyProvider, modelParamsFromOptions } from "./catalog/catalog.ts"
-import { createModelSource, type ModelSource } from "./catalog/source.ts"
+import { createModelSource } from "./catalog/source.ts"
 import { asCatalogModelID, PROVIDER_ID } from "./ids.ts"
 import { toLanguageModel } from "./model/language-model.ts"
 import { bindRuntime } from "./runtime.ts"
@@ -15,7 +15,12 @@ export const plugin = Plugin.define({
   id: "opencode-cursor-provider",
   async setup(ctx) {
     const link = createCursorLink()
-    const models = createModelSource(link)
+    const models = createModelSource({
+      restoreCredential: () => link.restore(ctx),
+      resolveApiKey: () => link.resolve(),
+      rejectCredential: () => link.reject(),
+      reloadCatalog: () => ctx.catalog.reload(),
+    })
     const bridge = createSessionAgentBridge({
       link,
       models: () => models.list(),
@@ -73,10 +78,15 @@ export const plugin = Plugin.define({
       ),
     ]
 
-    const stopRefresh = watchModels(ctx, link, models)
+    const stopRefresh = watchModels({
+      onLinked: (listener) => link.onLinked(listener),
+      subscribe: (signal) => ctx.event.subscribe({ signal }),
+      refresh: () => models.refresh(),
+      close: () => models.close(),
+    })
 
     return async () => {
-      stopRefresh()
+      await stopRefresh()
       for (const registration of registrations.toReversed()) {
         await registration.dispose()
       }
@@ -113,18 +123,28 @@ function writeSystem(system: Array<{ type: "text"; text: string }>, stamped: str
   }
 }
 
-function watchModels(ctx: Plugin.Context, link: CursorLink, models: ModelSource): () => void {
+export interface ModelWatcherDependencies {
+  onLinked(listener: () => void): () => void
+  subscribe(signal: AbortSignal): AsyncIterable<{ readonly type: string }>
+  refresh(): Promise<void>
+  close(): Promise<void>
+}
+
+export function watchModels(dependencies: ModelWatcherDependencies): () => Promise<void> {
   const events = new AbortController()
+  let stopped = false
+  let cleanup: Promise<void> | undefined
   const refresh = () => {
-    void models.refresh(ctx)
+    if (stopped) return
+    void dependencies.refresh().catch(() => {})
   }
 
-  const stopLinked = link.onLinked(refresh)
+  const stopLinked = dependencies.onLinked(refresh)
   refresh()
 
-  void (async () => {
+  const eventTask = (async () => {
     try {
-      for await (const event of ctx.event.subscribe({ signal: events.signal })) {
+      for await (const event of dependencies.subscribe(events.signal)) {
         if (event.type === "credential.updated" || event.type === "credential.switched") refresh()
       }
     } catch {
@@ -140,9 +160,16 @@ function watchModels(ctx: Plugin.Context, link: CursorLink, models: ModelSource)
   stop.unref?.()
 
   return () => {
-    stopLinked()
-    events.abort()
-    clearInterval(retry)
-    clearTimeout(stop)
+    if (cleanup !== undefined) return cleanup
+    cleanup = (async () => {
+      stopped = true
+      stopLinked()
+      events.abort()
+      clearInterval(retry)
+      clearTimeout(stop)
+      await eventTask
+      await dependencies.close()
+    })()
+    return cleanup
   }
 }

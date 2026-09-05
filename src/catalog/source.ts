@@ -1,35 +1,102 @@
 import { AuthenticationError, Cursor } from "@cursor/sdk"
-import type { Plugin } from "@opencode-ai/plugin"
-import type { CursorLink } from "../auth/link.ts"
+import type { CursorApiKey } from "../ids.ts"
 import { parseListedModels, SEED_MODELS, type CursorModelDescriptor } from "./catalog.ts"
+
+type ModelSnapshot =
+  | { readonly kind: "seed"; readonly models: readonly CursorModelDescriptor[] }
+  | { readonly kind: "listed"; readonly models: readonly CursorModelDescriptor[] }
+
+export interface ModelSourceDependencies {
+  restoreCredential(): Promise<void>
+  resolveApiKey(): Promise<CursorApiKey | undefined>
+  rejectCredential(): void
+  reloadCatalog(): Promise<void>
+  listModels?(apiKey: CursorApiKey): Promise<unknown>
+}
 
 export interface ModelSource {
   list(): readonly CursorModelDescriptor[]
-  refresh(ctx: Plugin.Context): Promise<void>
+  refresh(): Promise<void>
+  close(): Promise<void>
 }
 
-export function createModelSource(link: CursorLink): ModelSource {
-  let models: CursorModelDescriptor[] = [...SEED_MODELS]
+export function createModelSource(dependencies: ModelSourceDependencies): ModelSource {
+  const listModels = dependencies.listModels ?? ((apiKey: CursorApiKey) => Cursor.models.list({ apiKey }))
+  let snapshot: ModelSnapshot = { kind: "seed", models: SEED_MODELS }
+  let catalogDirty = false
+  let activeDrain: Promise<void> | undefined
+  let trailingRefresh = false
+  let closed = false
+  let closing: Promise<void> | undefined
+
+  async function reloadDirtyCatalog(): Promise<void> {
+    if (!catalogDirty) return
+    try {
+      await dependencies.reloadCatalog()
+      catalogDirty = false
+    } catch {
+      return
+    }
+  }
+
+  function selectSeeds(): void {
+    if (snapshot.kind === "seed") return
+    snapshot = { kind: "seed", models: SEED_MODELS }
+    catalogDirty = true
+  }
+
+  async function refreshOnce(): Promise<void> {
+    await dependencies.restoreCredential()
+    const apiKey = await dependencies.resolveApiKey()
+    if (apiKey === undefined) {
+      selectSeeds()
+      await reloadDirtyCatalog()
+      return
+    }
+
+    try {
+      snapshot = { kind: "listed", models: parseListedModels(await listModels(apiKey)) }
+      catalogDirty = true
+    } catch (error) {
+      if (error instanceof AuthenticationError) {
+        dependencies.rejectCredential()
+        selectSeeds()
+      }
+    }
+    await reloadDirtyCatalog()
+  }
+
+  function startDrain(): Promise<void> {
+    return (async () => {
+      try {
+        do {
+          trailingRefresh = false
+          await refreshOnce()
+        } while (trailingRefresh)
+      } finally {
+        activeDrain = undefined
+      }
+    })()
+  }
 
   return {
     list() {
-      return models
+      return snapshot.models
     },
-    async refresh(ctx) {
-      await link.restore(ctx)
-      const apiKey = await link.resolve()
-      if (apiKey === undefined) return
-      try {
-        models = parseListedModels(await Cursor.models.list({ apiKey }))
-      } catch (error) {
-        if (error instanceof AuthenticationError) link.reject()
-        return
+    refresh() {
+      if (closed) return Promise.resolve()
+      if (activeDrain !== undefined) {
+        trailingRefresh = true
+        return activeDrain
       }
-      try {
-        await ctx.catalog.reload()
-      } catch {
-        // Keep the listed models. The next credential or poll can replay the catalog.
-      }
+      activeDrain = startDrain()
+      return activeDrain
+    },
+    close() {
+      if (closing !== undefined) return closing
+      closed = true
+      closing = activeDrain ?? Promise.resolve()
+      return closing
     },
   }
 }
