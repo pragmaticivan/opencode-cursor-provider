@@ -1,52 +1,90 @@
 # opencode-cursor-provider
 
-OpenCode 2 plugin that signs into Cursor with the official SDK and runs Cursor agents from the TUI.
+Use Cursor models and the Cursor coding agent in OpenCode 2. The plugin uses the official Cursor SDK.
 
-Cursor's agent edits the workspace. OpenCode tools stay off for Cursor models.
+The Cursor coding agent can read and change your workspace. OpenCode shows Cursor reasoning and tool activity in the session.
 
-## Install
+## Requirements
+
+- OpenCode 2
+- Node.js 22.13 or later
+- A Cursor account or a Cursor API key
+
+## Install the plugin
+
+Run this command:
 
 ```sh
 opencode2 plugin add opencode-cursor-provider
 ```
 
-Or in `opencode.jsonc`:
+You can also add the plugin to `opencode.jsonc`:
 
 ```jsonc
 {
-  "plugins": ["opencode-cursor-provider"]
+	"plugins": ["opencode-cursor-provider"]
 }
 ```
 
-Local checkout:
+Restart OpenCode after you change the plugin configuration.
 
-```jsonc
-{
-  "plugins": ["/Users/pragmaticivan/Code/pragmaticivan/opencode-cursor"]
-}
-```
+## Connect Cursor
 
-OpenCode loads `index.ts` from that directory. Restart after changing the plugin:
+1. Start `opencode2`.
+2. Run `/connect`.
+3. Select **Cursor**.
+4. Select browser login, API key, or `CURSOR_API_KEY`.
+
+Browser login creates a user API key. Sign in again when the key expires.
+
+## Select a model
+
+1. Run `/models`.
+2. Select a model under **Cursor**.
+
+The plugin gets the model list and the model variants from Cursor. The fallback list includes `cursor/composer-2.5` and `cursor/auto`.
+
+## How the plugin works
+
+- Cursor runs its own tools and changes the workspace.
+- OpenCode tools stay off for Cursor models.
+- OpenCode shows Cursor tools as provider-executed tool calls.
+- The plugin keeps one Cursor agent for each OpenCode session.
+- The plugin starts a new Cursor agent after a model change, a directory change, or a conversation rewind.
+- OpenCode cancellation stops the active Cursor run.
+
+## Current limits
+
+- The plugin supports text input and text output.
+- The plugin rejects file and image input. It does not discard the input.
+- The plugin rejects structured output requests.
+- OpenCode sampling settings do not change Cursor model parameters.
+- Cursor controls tool access and tool approval for its tools.
+
+## Credentials
+
+OpenCode stores the Cursor credentials. The plugin does not write `~/.cursor/sdk/auth.json`.
+
+You can set `CURSOR_API_KEY` when you do not want to store a connection in OpenCode.
+
+## Develop the plugin
+
+Install the dependencies:
 
 ```sh
-opencode2 service restart
+bun install
 ```
 
-## Connect
+Run the checks:
 
-In `opencode2`:
+```sh
+bun test
+bun run typecheck
+bun run build
+```
 
-1. `/connect`
-2. Choose **Cursor**
-3. Browser login, a pasted API key, or `CURSOR_API_KEY`
+The source code is in `src/`. The build writes the package files to `dist/`.
 
-Then `/models` and pick `cursor/composer-2.5` (or another listed Cursor model).
+## License
 
-## Notes
-
-- OpenCode 2 only.
-- Login mints a user API key. There is no refresh token. Sign in again when it expires.
-- Credentials live in OpenCode. The plugin does not write `~/.cursor/sdk/auth.json`.
-- Cursor tools run inside Cursor. OpenCode shows them as provider-executed tool calls.
-- Model variants come from Cursor. OpenCode sampling controls such as temperature are not sent to Cursor.
-- The plugin rejects file and image parts. It does not drop them.
+MIT
