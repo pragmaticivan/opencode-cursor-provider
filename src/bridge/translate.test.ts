@@ -62,7 +62,11 @@ describe("translate", () => {
         type: "tool-result",
         id: "call",
         name: "edit",
-        result: { title: "edit", metadata: { changed: true }, output: '{"changed":true}' },
+        result: {
+          title: "src/index.ts",
+          metadata: { changed: true, output: '{"changed":true}' },
+          output: '{"changed":true}',
+        },
         isError: false,
       },
     ])
@@ -93,11 +97,48 @@ describe("translate", () => {
         id: "call",
         name: "shell",
         result: {
-          title: "shell",
-          metadata: { exitCode: 0, signal: "", stdout: "working tree clean\n", stderr: "", executionTime: 10 },
+          title: "git status",
+          metadata: { output: "working tree clean\n", exit: 0 },
           output: "working tree clean\n",
         },
         isError: false,
+      },
+    ])
+  })
+
+  test("unwraps failed Cursor shell results into stderr text", () => {
+    expect(
+      translate({
+        ...tool,
+        name: "shell",
+        status: "completed",
+        args: { command: "git status" },
+        result: {
+          status: "failure",
+          value: {
+            exitCode: 128,
+            signal: "",
+            stdout: "",
+            stderr: "fatal: not a git repository (or any of the parent directories): .git\n",
+            executionTime: 3104,
+          },
+        },
+      }),
+    ).toEqual([
+      { type: "tool-call", id: "call", name: "shell", input: { command: "git status" } },
+      {
+        type: "tool-result",
+        id: "call",
+        name: "shell",
+        result: {
+          title: "git status",
+          metadata: {
+            output: "fatal: not a git repository (or any of the parent directories): .git\n",
+            exit: 128,
+          },
+          output: "fatal: not a git repository (or any of the parent directories): .git\n",
+        },
+        isError: true,
       },
     ])
   })

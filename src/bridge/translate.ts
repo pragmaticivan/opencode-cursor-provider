@@ -59,7 +59,7 @@ export function translate(message: SDKMessage): readonly TurnEvent[] {
           type: "tool-result",
           id: message.call_id,
           name: tool.name,
-          result: resultOutput(tool.name, result.value),
+          result: resultOutput(tool.name, result.value, tool.input),
           isError: message.status === "error" || result.isError,
         },
       ]
@@ -123,18 +123,35 @@ function rename(input: { [key: string]: JsonValue }, from: string, to: string): 
 function cursorResult(value: unknown): { value: JsonValue; isError: boolean } {
   const result = jsonValue(value)
   if (!isJsonObject(result) || typeof result.status !== "string") return { value: result, isError: false }
-  if (result.status === "success" && "value" in result) return { value: result.value ?? null, isError: false }
-  if (result.status === "error" && "error" in result) return { value: result.error ?? "Tool call failed", isError: true }
-  return { value: result, isError: result.status === "error" }
+  const isError = result.status !== "success"
+  if ("value" in result) return { value: result.value ?? null, isError }
+  if (isError && "error" in result) return { value: result.error ?? "Tool call failed", isError: true }
+  return { value: result, isError }
 }
 
-function resultOutput(name: string, value: JsonValue): NonNullJsonValue {
-  const metadata = isJsonObject(value) ? value : {}
+function resultOutput(name: string, value: JsonValue, input: JsonValue): NonNullJsonValue {
+  const output = textOutput(name, value)
   return {
-    title: name,
-    metadata,
-    output: textOutput(name, value),
+    title: toolTitle(name, input),
+    metadata: toolMetadata(name, value, output),
+    output,
   }
+}
+
+function toolTitle(name: string, input: JsonValue): string {
+  if (name === "shell" && isJsonObject(input) && typeof input.command === "string") return input.command
+  if ((name === "read" || name === "edit" || name === "write") && isJsonObject(input) && typeof input.filePath === "string") {
+    return input.filePath
+  }
+  return name
+}
+
+function toolMetadata(name: string, value: JsonValue, output: string): { [key: string]: JsonValue } {
+  if (name === "shell") {
+    return { output, exit: isJsonObject(value) && typeof value.exitCode === "number" ? value.exitCode : null }
+  }
+  const metadata = isJsonObject(value) ? { ...value } : {}
+  return { ...metadata, output }
 }
 
 function textOutput(name: string, value: JsonValue): string {
@@ -143,7 +160,8 @@ function textOutput(name: string, value: JsonValue): string {
     if (name === "shell") {
       const stdout = typeof value.stdout === "string" ? value.stdout : ""
       const stderr = typeof value.stderr === "string" ? value.stderr : ""
-      if (stdout.length > 0 || stderr.length > 0) return stdout + stderr
+      const text = stdout + stderr
+      return text.length > 0 ? text : "(no output)"
     }
     if (name === "read" && typeof value.content === "string") return value.content
     if (name === "edit" && typeof value.diffString === "string") return value.diffString
