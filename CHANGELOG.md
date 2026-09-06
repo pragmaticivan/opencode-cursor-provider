@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/pragmaticivan/opencode-cursor-provider/compare/opencode-cursor-provider-v0.3.1...opencode-cursor-provider-v0.3.2) (2026-09-06)
+
+
+### Bug Fixes
+
+* preserve Code Mode instructions ([481b2c5](https://github.com/pragmaticivan/opencode-cursor-provider/commit/481b2c57ab6e781542b9448e071743ee7b49e2cc))
+
 ## [0.3.1](https://github.com/pragmaticivan/opencode-cursor-provider/compare/opencode-cursor-provider-v0.3.0...opencode-cursor-provider-v0.3.1) (2026-09-06)
 
 
