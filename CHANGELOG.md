@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/pragmaticivan/opencode-cursor-provider/compare/opencode-cursor-provider-v0.2.0...opencode-cursor-provider-v0.3.0) (2026-09-05)
+
+
+### Features
+
+* bridge OpenCode tools into Cursor ([30729e2](https://github.com/pragmaticivan/opencode-cursor-provider/commit/30729e21b86b9df3835d51a93924bd1cc89c0891))
+
 ## [0.2.0](https://github.com/pragmaticivan/opencode-cursor-provider/compare/opencode-cursor-provider-v0.1.1...opencode-cursor-provider-v0.2.0) (2026-09-05)
 
 
