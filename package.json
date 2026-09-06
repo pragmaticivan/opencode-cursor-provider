@@ -1,6 +1,6 @@
 {
   "name": "opencode-cursor-provider",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "OpenCode 2 plugin that connects Cursor via the official SDK",
   "type": "module",
   "license": "Apache-2.0",
