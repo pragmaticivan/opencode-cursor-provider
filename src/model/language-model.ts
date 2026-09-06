@@ -28,13 +28,13 @@ import {
 import type { TurnEvent } from "../bridge/translate.ts"
 import { CursorPluginFailure, type CursorPluginError } from "../errors.ts"
 import type { CatalogModelID } from "../ids.ts"
-import { parseCursorOptions } from "./provider-options.ts"
+import { CURSOR_PROVIDER_OPTION_NAMES, parseCursorOptions } from "./provider-options.ts"
 
 export function toLanguageModel(input: {
   bridge: SessionAgentBridge
   modelID: CatalogModelID
   wireID: string
-  params?: readonly ModelParameterValue[]
+  params: readonly ModelParameterValue[] | undefined
 }): LanguageModelV3 {
   const stream = (options: LanguageModelV3CallOptions) => {
     const coupled = coupleAbort(options.abortSignal)
@@ -576,14 +576,7 @@ function warningsOf(options: LanguageModelV3CallOptions): SharedV3Warning[] {
   return warnings
 }
 
-const CURSOR_OPTIONS = new Set([
-  "mode",
-  "tools",
-  "disallowedTools",
-  "sandboxOptions",
-  "autoReview",
-  "settingSources",
-])
+const CURSOR_OPTIONS = new Set<string>(CURSOR_PROVIDER_OPTION_NAMES)
 
 function hasOptions(options: object | undefined): boolean {
   return options !== undefined && Object.keys(options).length > 0

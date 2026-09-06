@@ -411,6 +411,7 @@ describe("Cursor language model", () => {
       bridge,
       modelID: asCatalogModelID("model"),
       wireID: "model",
+      params: undefined,
     }).doStream(call)
     expect((await Array.fromAsync(stream)).map((part) => part.type)).toEqual([
       "stream-start",
@@ -443,6 +444,7 @@ describe("Cursor language model", () => {
       bridge,
       modelID: asCatalogModelID("model"),
       wireID: "model",
+      params: undefined,
     }).doStream(call)
     const reader = stream.getReader()
     await reader.read()

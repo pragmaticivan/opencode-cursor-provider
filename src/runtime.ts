@@ -23,12 +23,6 @@ export function model(modelID: string, settings?: unknown) {
     bridge: runtime.bridge,
     modelID: asCatalogModelID(modelID),
     wireID,
-    ...paramsOption(settings),
+    params: modelParamsFromOptions(settings),
   })
-}
-
-function paramsOption(settings: unknown): { readonly params: NonNullable<ReturnType<typeof modelParamsFromOptions>> } | Record<never, never> {
-  const params = modelParamsFromOptions(settings)
-  if (params === undefined) return {}
-  return { params }
 }
