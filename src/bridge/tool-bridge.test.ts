@@ -43,6 +43,20 @@ test("namespaces OpenCode tools away from Cursor native tools", () => {
   expect(Object.keys(bridge.customTools)).toEqual(["opencode__read", "opencode__docs_search"])
 })
 
+test("directs Cursor to discover MCP tools through OpenCode Code Mode", () => {
+  const bridge = createOpenCodeToolBridge([
+    {
+      name: "execute",
+      description: "Run JavaScript in a confined Code Mode runtime.",
+      inputSchema: { type: "object" },
+    },
+  ])
+
+  expect(bridge.customTools.opencode__execute?.description).toContain(
+    'tools.$codemode.search({ query: "posthog" })',
+  )
+})
+
 test("resolves parallel calls by bridge-owned ID", async () => {
   const bridge = createOpenCodeToolBridge(
     [{ name: "docs_search", inputSchema: { type: "object" } }],
