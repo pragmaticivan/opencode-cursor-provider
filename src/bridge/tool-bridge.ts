@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto"
 import type { UserPart } from "./conversation.ts"
 
 const TOOL_PREFIX = "opencode__"
+const CODE_MODE_DISCOVERY = [
+  "OpenCode MCP tools are available only inside this Code Mode tool.",
+  "Do not search for them with Cursor GetDynamicTools.",
+  'To find an MCP tool, call this tool with code such as `return await tools.$codemode.search({ query: "posthog" })`.',
+].join("\n")
 
 export interface OpenCodeToolRequest {
   readonly id: string
@@ -52,7 +57,14 @@ export function createOpenCodeToolBridge(
     .map<[string, SDKCustomTool]>((tool) => [
       `${TOOL_PREFIX}${tool.name}`,
       {
-        ...(tool.description === undefined ? {} : { description: tool.description }),
+        ...(tool.description === undefined && tool.name !== "execute"
+          ? {}
+          : {
+              description:
+                tool.name === "execute"
+                  ? [CODE_MODE_DISCOVERY, tool.description].filter((item) => item !== undefined).join("\n\n")
+                  : tool.description,
+            }),
         inputSchema: tool.inputSchema,
         execute(args, context) {
           sequence += 1
