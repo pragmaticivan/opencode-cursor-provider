@@ -53,6 +53,11 @@ export interface TurnRunnerContext {
   readonly openAgent?: typeof openCursorAgent
 }
 
+interface ToolContinuation {
+  readonly checkpoint: ReturnType<typeof checkpointOf>
+  readonly calls: readonly { readonly id: string; readonly name: string }[]
+}
+
 interface TurnPlan {
   readonly apiKey: CursorApiKey
   readonly wireID: string
@@ -63,7 +68,7 @@ interface TurnPlan {
 }
 
 export function createTurnRunner(ctx: TurnRunnerContext) {
-  const liveRuns = new Map<OpencodeSessionID, LiveCursorRun>()
+  const liveRuns = new Map<OpencodeSessionID, SuspendedCursorRun>()
   return Object.assign(
     (request: TurnRequest) => runTurn(ctx, request, liveRuns),
     {
@@ -97,17 +102,22 @@ interface LiveCursorRun {
   readonly translate: ReturnType<typeof createMessageTranslator>
   readonly plan: TurnPlan
   nextMessage: Promise<IteratorResult<SDKMessage>> | undefined
-  continuation: {
-    readonly checkpoint: ReturnType<typeof checkpointOf>
-    readonly calls: readonly { readonly id: string; readonly name: string }[]
-  } | undefined
   sawUsage: boolean
 }
+
+interface SuspendedCursorRun extends LiveCursorRun {
+  readonly toolBridge: OpenCodeToolBridge
+  readonly continuation: ToolContinuation
+}
+
+type DrainOutcome =
+  | { readonly type: "finished" }
+  | { readonly type: "suspended"; readonly run: SuspendedCursorRun }
 
 async function* runTurn(
   ctx: TurnRunnerContext,
   request: TurnRequest,
-  liveRuns: Map<OpencodeSessionID, LiveCursorRun>,
+  liveRuns: Map<OpencodeSessionID, SuspendedCursorRun>,
 ): AsyncGenerator<TurnEvent> {
   const lockKey = request.scope?.sessionID ?? "one-shot"
   const release = await ctx.lock.acquire(lockKey)
@@ -126,18 +136,16 @@ async function* runTurn(
         ctx.bindings.drop(scope.sessionID)
       } else {
         const continuation = suspended.continuation
-        const parts = continuation === undefined
-          ? undefined
-          : toolResultsAfter(request.conversation, continuation.checkpoint, continuation.calls)
+        const parts = toolResultsAfter(request.conversation, continuation.checkpoint, continuation.calls)
         const resolved = parts === undefined
           ? 0
-          : suspended.toolBridge?.resolve(parts.map((part) => ({ id: part.id, output: part.output, isError: part.isError }))) ?? 0
-        if (resolved !== continuation?.calls.length) {
+          : suspended.toolBridge.resolve(parts.map((part) => ({ id: part.id, output: part.output, isError: part.isError })))
+        if (resolved !== continuation.calls.length) {
           await closeLiveRun(suspended, "OpenCode did not return the pending tool result")
           liveRuns.delete(scope.sessionID)
           ctx.bindings.drop(scope.sessionID)
         } else {
-          let outcome: "finished" | "suspended"
+          let outcome: DrainOutcome
           try {
             outcome = yield* drainLiveRun(ctx, request, suspended)
           } catch (error) {
@@ -147,7 +155,10 @@ async function* runTurn(
             yield failedFromCaught(error, request.signal, ctx.link.reject)
             return
           }
-          if (outcome === "suspended") return
+          if (outcome.type === "suspended") {
+            liveRuns.set(scope.sessionID, outcome.run)
+            return
+          }
           liveRuns.delete(scope.sessionID)
           await suspended.session.dispose()
           return
@@ -217,12 +228,11 @@ async function* runTurn(
           translate: createMessageTranslator(),
           plan,
           nextMessage: undefined,
-          continuation: undefined,
           sawUsage: false,
         }
         const outcome = yield* drainLiveRun(ctx, request, live)
-        if (outcome === "suspended" && request.scope !== undefined) {
-          liveRuns.set(request.scope.sessionID, live)
+        if (outcome.type === "suspended" && request.scope !== undefined) {
+          liveRuns.set(request.scope.sessionID, outcome.run)
           session = undefined
         }
         return
@@ -264,7 +274,7 @@ async function* drainLiveRun(
   ctx: TurnRunnerContext,
   request: TurnRequest,
   live: LiveCursorRun,
-): AsyncGenerator<TurnEvent, "finished" | "suspended"> {
+): AsyncGenerator<TurnEvent, DrainOutcome> {
   let cancelPromise: Promise<void> | undefined
   const cancel = () => {
     live.toolBridge?.cancel("The OpenCode request was cancelled")
@@ -279,30 +289,34 @@ async function* drainLiveRun(
     while (true) {
       if (request.signal?.aborted) {
         yield { type: "failed", error: { kind: "cancelled" } }
-        return "finished"
+        return { type: "finished" }
       }
       const nextMessage = live.nextMessage ?? live.messages.next()
       live.nextMessage = nextMessage
-      const next = live.toolBridge === undefined
+      const toolBridge = live.toolBridge
+      const next = toolBridge === undefined
         ? { type: "message" as const, value: await nextMessage }
         : await Promise.race([
             nextMessage.then((value) => ({ type: "message" as const, value })),
-            live.toolBridge.waitForCalls().then(() => ({ type: "tools" as const })),
+            toolBridge.waitForCalls().then(() => ({ type: "tools" as const, toolBridge })),
           ])
       if (next.type === "tools") {
-        const calls = live.toolBridge?.takeCalls() ?? []
+        const calls = next.toolBridge.takeCalls()
         if (calls.length === 0) continue
         for (const call of calls) {
           const event = { type: "tool-request" as const, ...call }
           response.accept(event)
           yield event
         }
-        live.continuation = {
+        const continuation = {
           checkpoint: checkpointOf(withResponse(request.conversation, response.parts())),
           calls: calls.map((call) => ({ id: call.id, name: call.name })),
         }
         yield { type: "done", reason: "tool-calls" }
-        return "suspended"
+        return {
+          type: "suspended",
+          run: { ...live, toolBridge: next.toolBridge, continuation },
+        }
       }
       live.nextMessage = undefined
       if (next.value.done) break
@@ -325,12 +339,12 @@ async function* drainLiveRun(
     const result = await live.run.wait()
     if (result.status === "cancelled") {
       yield { type: "failed", error: { kind: "cancelled" } }
-      return "finished"
+      return { type: "finished" }
     }
     if (!live.sawUsage && result.usage !== undefined) yield usageEvent(result.usage)
     if (result.status === "error") {
       yield { type: "failed", error: { kind: "agent-run-failed", detail: result.error?.message ?? result.id } }
-      return "finished"
+      return { type: "finished" }
     }
     if (request.scope && live.plan.kind !== "ONE_SHOT") {
       ctx.bindings.put({
@@ -354,7 +368,7 @@ async function* drainLiveRun(
         ...(result.model === undefined ? {} : { modelId: result.model.id }),
       },
     }
-    return "finished"
+    return { type: "finished" }
   } finally {
     request.signal?.removeEventListener("abort", cancel)
     await cancelPromise
