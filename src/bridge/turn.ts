@@ -11,7 +11,7 @@ import {
 } from "@cursor/sdk"
 import type { CursorLink } from "../auth/link.ts"
 import { resolveWireId, type CursorModelDescriptor } from "../catalog/catalog.ts"
-import { nowMs, type CatalogModelID, type CursorApiKey, type OpencodeSessionID } from "../ids.ts"
+import type { CatalogModelID, CursorApiKey, OpencodeSessionID } from "../ids.ts"
 import type { CursorAgentOptions } from "../model/provider-options.ts"
 import { isAgentLost, openCursorAgent } from "./agent.ts"
 import { route, type BindingStore, type RouteKind, type SessionAgentBinding, type TurnScope } from "./binding.ts"
@@ -49,7 +49,6 @@ export interface TurnRunnerContext {
   readonly link: CursorLink
   readonly models: () => readonly CursorModelDescriptor[]
   readonly bindings: BindingStore
-  readonly clock: () => number
   readonly lock: KeyedLock
   readonly openAgent?: typeof openCursorAgent
 }
@@ -343,7 +342,6 @@ async function* drainLiveRun(
         params: request.params,
         mode: request.mode,
         agentOptions: request.agentOptions,
-        lastUsedAt: nowMs(ctx.clock),
       })
     }
     yield {
