@@ -35,7 +35,7 @@ export const plugin = Plugin.define({
         bridge,
         modelID: asCatalogModelID(model.id),
         wireID: model.modelID || fallbackID,
-        ...paramsOption(options),
+        params: modelParamsFromOptions(options),
       })
 
     const registrations = [
@@ -97,12 +97,6 @@ export const plugin = Plugin.define({
     }
   },
 })
-
-function paramsOption(options: unknown): { readonly params: NonNullable<ReturnType<typeof modelParamsFromOptions>> } | Record<never, never> {
-  const params = modelParamsFromOptions(options)
-  if (params === undefined) return {}
-  return { params }
-}
 
 async function sessionCwd(ctx: Plugin.Context, sessionID: string): Promise<string> {
   try {

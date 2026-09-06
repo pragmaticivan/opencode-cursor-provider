@@ -14,6 +14,15 @@ export interface CursorProviderOptions extends CursorAgentOptions {
   readonly mode?: AgentModeOption
 }
 
+export const CURSOR_PROVIDER_OPTION_NAMES = [
+  "mode",
+  "tools",
+  "disallowedTools",
+  "sandboxOptions",
+  "autoReview",
+  "settingSources",
+] as const satisfies readonly (keyof CursorProviderOptions)[]
+
 export interface ParsedCursorOptions {
   readonly mode?: AgentModeOption
   readonly agentOptions?: CursorAgentOptions

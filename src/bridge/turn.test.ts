@@ -1,7 +1,7 @@
 import type { ModelParameterValue, Run, RunResult, SDKUserMessage, SendOptions } from "@cursor/sdk"
 import { describe, expect, test } from "bun:test"
 import { SEED_MODELS } from "../catalog/catalog.ts"
-import { asAgentID, asApiKey, asCatalogModelID, asEpochMs, asSessionID } from "../ids.ts"
+import { asAgentID, asApiKey, asCatalogModelID, asSessionID } from "../ids.ts"
 import { createBindingStore, route } from "./binding.ts"
 import { checkpointOf } from "./conversation.ts"
 import { createLock } from "./lock.ts"
@@ -62,7 +62,6 @@ function runner(
     },
     models: () => SEED_MODELS,
     bindings,
-    clock: () => 1,
     lock: createLock(),
     async openAgent(input) {
       receivedParams.push(input.params ?? [])
@@ -116,7 +115,6 @@ describe("runTurn", () => {
       },
       models: () => SEED_MODELS,
       bindings: createBindingStore(),
-      clock: () => 1,
       lock: createLock(),
       async openAgent() {
         opens += 1
@@ -401,7 +399,6 @@ describe("runTurn", () => {
       params: undefined,
       mode: undefined,
       agentOptions: undefined,
-      lastUsedAt: asEpochMs(1),
     })
     const received: Array<string | SDKUserMessage> = []
     await Array.fromAsync(
