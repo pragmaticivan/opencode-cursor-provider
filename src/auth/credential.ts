@@ -10,15 +10,6 @@ export type CursorCredential =
   | { readonly kind: "key"; readonly apiKey: CursorApiKey }
   | { readonly kind: "env"; readonly apiKey: CursorApiKey; readonly variable: typeof ENV_NAME }
 
-export type RenewalPolicy =
-  | { readonly kind: "none" }
-  | { readonly kind: "reauth-required"; readonly at: EpochMs }
-
-export function renewalPolicy(credential: CursorCredential): RenewalPolicy {
-  if (credential.kind === "oauth") return { kind: "reauth-required", at: credential.expiresAt }
-  return { kind: "none" }
-}
-
 export function credentialKey(credential: CursorCredential): CursorApiKey {
   return credential.apiKey
 }
@@ -84,12 +75,6 @@ export function oauthFromLogin(input: {
   })
 }
 
-export function keyFromPaste(raw: string): Parsed<CursorCredential> {
-  const key = parseApiKey(raw)
-  if (!key.ok) return key
-  return ok({ kind: "key", apiKey: key.value })
-}
-
 function parseExpires(value: unknown): EpochMs | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined
   const ms = value >= 1_000_000_000 && value < 1_000_000_000_000 ? value * 1000 : value
@@ -113,4 +98,3 @@ export function toHostOAuth(credential: Extract<CursorCredential, { kind: "oauth
     ...(credential.email === undefined ? {} : { metadata: { email: credential.email } }),
   }
 }
-

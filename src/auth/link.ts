@@ -74,9 +74,6 @@ export function createCursorLink(input: { env?: NodeJS.ProcessEnv; clock?: () =>
           assign(
             reduce(state, {
               type: "login-started",
-              url: loginUrl,
-              abort,
-              now: nowMs(clock),
             }),
           )
           return {
@@ -86,7 +83,7 @@ export function createCursorLink(input: { env?: NodeJS.ProcessEnv; clock?: () =>
             callback: login.then((result) => {
               const parsed = oauthFromLogin(result)
               if (!parsed.ok) {
-                assign(reduce(state, { type: "login-failed", detail: parsed.issue }))
+                assign(reduce(state, { type: "login-failed" }))
                 throw new Error(parsed.issue)
               }
               assign(reduce(state, { type: "login-succeeded", credential: parsed.value, now: nowMs(clock) }))

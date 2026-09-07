@@ -31,7 +31,7 @@ export type TurnEvent =
     }
   | {
       readonly type: "done"
-      readonly reason: "stop" | "length" | "aborted" | "tool-calls"
+      readonly reason: "stop" | "length" | "tool-calls"
       readonly metadata?: {
         readonly runId: string
         readonly requestId?: string

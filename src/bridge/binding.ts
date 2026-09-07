@@ -1,5 +1,5 @@
 import type { AgentModeOption, ModelParameterValue } from "@cursor/sdk"
-import type { CatalogModelID, CursorAgentID, EpochMs, OpencodeSessionID } from "../ids.ts"
+import type { CatalogModelID, CursorAgentID, OpencodeSessionID } from "../ids.ts"
 import type { CursorAgentOptions } from "../model/provider-options.ts"
 import { extendsCheckpoint, type Conversation, type ConversationCheckpoint } from "./conversation.ts"
 
@@ -12,7 +12,6 @@ export interface SessionAgentBinding {
   readonly params: readonly ModelParameterValue[] | undefined
   readonly mode: AgentModeOption | undefined
   readonly agentOptions: CursorAgentOptions | undefined
-  readonly lastUsedAt: EpochMs
 }
 
 export interface TurnScope {

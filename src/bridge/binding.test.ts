@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { asAgentID, asCatalogModelID, asEpochMs, asSessionID } from "../ids.ts"
+import { asAgentID, asCatalogModelID, asSessionID } from "../ids.ts"
 import { createBindingStore, route, type SessionAgentBinding, type TurnScope } from "./binding.ts"
 import { checkpointOf, type Conversation } from "./conversation.ts"
 
@@ -23,7 +23,6 @@ const binding: SessionAgentBinding = {
   params: [{ id: "thinking", value: "high" }],
   mode: "agent",
   agentOptions: { tools: ["read"] },
-  lastUsedAt: asEpochMs(1),
 }
 
 describe("route", () => {

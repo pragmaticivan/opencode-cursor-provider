@@ -20,13 +20,11 @@ export function createSessionAgentBridge(input: {
   link: CursorLink
   models: () => readonly CursorModelDescriptor[]
   bindings?: BindingStore
-  clock?: () => number
 }): SessionAgentBridge {
   const runTurn = createTurnRunner({
     link: input.link,
     models: input.models,
     bindings: input.bindings ?? createBindingStore(),
-    clock: input.clock ?? Date.now,
     lock: createLock(),
   })
 

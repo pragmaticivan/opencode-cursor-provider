@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { asApiKey, asEpochMs } from "../ids.ts"
-import { fromHostCredential, keyFromPaste, oauthFromLogin } from "./credential.ts"
+import { fromHostCredential, oauthFromLogin } from "./credential.ts"
 
 describe("fromHostCredential", () => {
   test("reads an oauth access token", () => {
@@ -18,13 +18,6 @@ describe("fromHostCredential", () => {
         expiresAt: asEpochMs(9_000),
         email: "a@b.c",
       },
-    })
-  })
-
-  test("reads a pasted key", () => {
-    expect(keyFromPaste("  cursor_key  ")).toEqual({
-      ok: true,
-      value: { kind: "key", apiKey: asApiKey("cursor_key") },
     })
   })
 
