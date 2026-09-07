@@ -33,6 +33,12 @@ import {
 } from "./tool-bridge.ts"
 import { createMessageTranslator, type TurnEvent } from "./translate.ts"
 
+const OPEN_CODE_TOOL_INSTRUCTION = [
+  "Use GetMcpTools with server custom-user-tools to discover OpenCode tools.",
+  "Use CallMcpTool with server custom-user-tools and the bare tool name, which starts with opencode__.",
+  "Inside opencode__execute, search is a global function. Call search directly, not through the tools object.",
+].join("\n\n")
+
 export interface TurnRequest {
   readonly modelID: CatalogModelID
   readonly scope: TurnScope | undefined
@@ -244,7 +250,7 @@ async function* runTurn(
             ...plan,
             kind: "FRESH",
             binding: undefined,
-            prompt: promptFor("FRESH", request.conversation, undefined),
+            prompt: promptFor("FRESH", request.conversation, undefined, request.tools),
           }
           continue
         }
@@ -412,7 +418,7 @@ function planTurn(
     params: request.params,
     kind,
     binding,
-    prompt: promptFor(kind, request.conversation, binding),
+    prompt: promptFor(kind, request.conversation, binding, request.tools),
   }
 }
 
@@ -432,12 +438,14 @@ function promptFor(
   kind: RouteKind,
   conversation: Conversation,
   binding: SessionAgentBinding | undefined,
+  tools: readonly OpenCodeToolDefinition[] | undefined,
 ): string | SDKUserMessage {
+  const toolSystem = (tools?.length ?? 0) === 0 ? [] : [OPEN_CODE_TOOL_INSTRUCTION]
   if (kind === "RESUME" && binding) {
     const turn = resumeTurn(conversation, binding.checkpoint)
-    if (turn !== undefined) return cursorMessage([], [turn])
+    if (turn !== undefined) return cursorMessage(toolSystem, [turn])
   }
-  return cursorMessage(conversation.system, conversation.turns)
+  return cursorMessage([...toolSystem, ...conversation.system], conversation.turns)
 }
 
 function failedFromCaught(error: unknown, signal: AbortSignal | undefined, unlink: () => void): TurnEvent {

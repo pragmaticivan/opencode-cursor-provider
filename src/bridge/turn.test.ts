@@ -205,6 +205,27 @@ describe("runTurn", () => {
     expect({ opens, sends, disposals }).toEqual({ opens: 1, sends: 1, disposals: 1 })
   })
 
+  test("directs Cursor to discover bridged OpenCode tools", async () => {
+    const received: Array<string | SDKUserMessage> = []
+    await Array.fromAsync(
+      runner(fakeRun(), [], received)({
+        modelID: asCatalogModelID("composer-2.5"),
+        scope: { sessionID: asSessionID("ses_tools"), cwd: "/repo" },
+        conversation: { system: [], turns: [{ role: "user", parts: [{ type: "text", text: "query Grafana" }] }] },
+        tools: [{ name: "execute", inputSchema: { type: "object" } }],
+      }),
+    )
+
+    expect(received).toEqual([
+      [
+        "System: Use GetMcpTools with server custom-user-tools to discover OpenCode tools.",
+        "Use CallMcpTool with server custom-user-tools and the bare tool name, which starts with opencode__.",
+        "Inside opencode__execute, search is a global function. Call search directly, not through the tools object.",
+        "User: query Grafana",
+      ].join("\n\n"),
+    ])
+  })
+
   test("uses RunResult usage when the stream has no usage message", async () => {
     const events = await eventsFrom(
       runner(
