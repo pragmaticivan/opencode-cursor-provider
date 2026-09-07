@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/pragmaticivan/opencode-cursor-provider/compare/opencode-cursor-provider-v0.3.2...opencode-cursor-provider-v0.3.3) (2026-09-07)
+
+
+### Bug Fixes
+
+* guide Cursor MCP tool discovery ([65b71c8](https://github.com/pragmaticivan/opencode-cursor-provider/commit/65b71c800a3739cf0d1991df65c5d8ce304766cf))
+
 ## [0.3.2](https://github.com/pragmaticivan/opencode-cursor-provider/compare/opencode-cursor-provider-v0.3.1...opencode-cursor-provider-v0.3.2) (2026-09-06)
 
 
